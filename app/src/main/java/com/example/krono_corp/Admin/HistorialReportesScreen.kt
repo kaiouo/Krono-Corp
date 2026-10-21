@@ -1,5 +1,5 @@
-package com.example.krono_corp.Admin
 
+package com.example.krono_corp.Admin
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,184 +13,182 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+data class Reporte(
+    val id: String,
+    val titulo: String,
+    val fecha: String,
+    val estado: String,
+    val descripcion: String
+)
 
-
-private val Azul = Color(0xFF1260C4)
-private val Fondo = Color(0xFFF6F7F9)
-private val Texto = Color(0xFF202124)
-private val Gris = Color(0xFF747780)
-
+private val reportesDemo = listOf(
+    Reporte(
+        "RPT-001",
+        "Resumen de ventas",
+        "20/10/2026",
+        "Completado",
+        "Reporte de demostración del resumen de ventas."
+    ),
+    Reporte(
+        "RPT-002",
+        "Auditoría de operaciones",
+        "18/10/2026",
+        "Pendiente",
+        "Reporte de demostración pendiente de revisión."
+    ),
+    Reporte(
+        "RPT-003",
+        "Revisión de cumplimiento",
+        "15/10/2026",
+        "Revisar",
+        "Reporte de demostración que requiere revisión."
+    )
+)
 
 @Composable
 fun HistorialReportesScreen() {
     var busqueda by remember { mutableStateOf("") }
     var filtro by remember { mutableStateOf("Todos") }
-    var mostrarFiltros by remember { mutableStateOf(false) }
+    var reporteSeleccionado by remember {
+        mutableStateOf<Reporte?>(null)
+    }
 
-    val reportes = listOf(
-        Triple("RPT-2023-1042", "Resumen de Evaluación de Ventas",
-            "Completado"),
-        Triple("RPT-2023-1041", "Auditoría de Operaciones Mensuales",
-            "Pendiente"),
-        Triple("RPT-2023-1039", "Revisión Anual de Cumplimiento",
-            "Revisar")
-    ).filter {
-        it.second.contains(busqueda, ignoreCase = true) &&
-                (filtro == "Todos" || it.third == filtro)
+    val filtrados = reportesDemo.filter { reporte ->
+        val coincideBusqueda =
+            reporte.titulo.contains(busqueda, ignoreCase = true) ||
+                    reporte.id.contains(busqueda, ignoreCase = true)
+
+        val coincideEstado =
+            filtro == "Todos" || reporte.estado == filtro
+
+        coincideBusqueda && coincideEstado
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
     ) {
         Text(
-            "Historial de reportes",
+            text = "Historial de reportes",
             fontSize = 26.sp,
             fontWeight = FontWeight.Bold
         )
 
-        Spacer(Modifier.height(16.dp))
-        CampoTexto(busqueda, { busqueda = it }, "Buscar reportes...")
+        Spacer(Modifier.height(12.dp))
 
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = { mostrarFiltros = !mostrarFiltros },
-            modifier = Modifier.fillMaxWidth()
+        OutlinedTextField(
+            value = busqueda,
+            onValueChange = { busqueda = it },
+            label = { Text("Buscar por nombre o código") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        Text("Filtrar por estado")
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(if (mostrarFiltros) "Ocultar filtros  ▴"
-            else "Filtrar  ☰")
-        }
-
-        if (mostrarFiltros) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Todos", "Completado", "Pendiente", "Revisar")
-                    .forEach { opcion ->
-                        FilterChip(
-                            selected = filtro == opcion,
-                            onClick = { filtro = opcion },
-                            label = { Text(opcion, fontSize = 11.sp) }
-                        )
-                    }
-            }
+            listOf("Todos", "Completado", "Pendiente", "Revisar")
+                .forEach { estado ->
+                    FilterChip(
+                        selected = filtro == estado,
+                        onClick = { filtro = estado },
+                        label = { Text(estado) }
+                    )
+                }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(reportes) { reporte ->
+        Text(
+            text = "${filtrados.size} reportes encontrados",
+            color = Color.Gray
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(filtrados, key = { it.id }) { reporte ->
                 Card(
+                    modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    )
                 ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(reporte.first, fontSize = 11.sp, color = Gris)
-                        Spacer(Modifier.height(4.dp))
-                        Text(reporte.second, fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp)
-                        Spacer(Modifier.height(8.dp))
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
                         Text(
-                            "Fecha de ejemplo • Sistema Admin",
-                            color = Gris,
+                            text = reporte.id,
+                            color = Color.Gray,
                             fontSize = 12.sp
                         )
-                        Spacer(Modifier.height(10.dp))
+
+                        Text(
+                            text = reporte.titulo,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = "Fecha: ${reporte.fecha}",
+                            color = Color.Gray
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
                         AssistChip(
                             onClick = {},
-                            label = { Text(reporte.third) }
+                            label = { Text(reporte.estado) }
                         )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+
+                        TextButton(
+                            onClick = {
+                                reporteSeleccionado = reporte
+                            }
                         ) {
-                            Text("Ver  ◉", color = Azul)
-                            Spacer(Modifier.width(18.dp))
-                            Text("Descargar  ↓", color = Azul)
+                            Text("Ver detalles")
                         }
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-private fun Estadistica(
-    titulo: String,
-    valor: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        shape = RoundedCornerShape(10.dp)
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Text(titulo, fontSize = 11.sp, color = Gris)
-            Spacer(Modifier.height(5.dp))
-            Text(valor, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
+    reporteSeleccionado?.let { reporte ->
+        AlertDialog(
+            onDismissRequest = {
+                reporteSeleccionado = null
+            },
+            title = {
+                Text(reporte.titulo)
+            },
+            text = {
+                Column {
+                    Text("Código: ${reporte.id}")
+                    Text("Fecha: ${reporte.fecha}")
+                    Text("Estado: ${reporte.estado}")
 
-@Composable
-private fun Etiqueta(texto: String) {
-    Spacer(Modifier.height(12.dp))
-    Text(texto, fontSize = 13.sp)
-}
+                    Spacer(Modifier.height(8.dp))
 
-@Composable
-private fun CampoTexto(
-    valor: String,
-    alCambiar: (String) -> Unit,
-    etiqueta: String
-) {
-    OutlinedTextField(
-        value = valor,
-        onValueChange = alCambiar,
-        placeholder = { Text(etiqueta, fontSize = 13.sp) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        shape = RoundedCornerShape(4.dp)
-    )
-}
-
-@Composable
-private fun Selector(
-    valor: String,
-    opciones: List<String>,
-    alSeleccionar: (String) -> Unit,
-    sugerencia: String
-) {
-    var expandido by remember { mutableStateOf(false) }
-
-    Box {
-        OutlinedButton(
-            onClick = { expandido = true },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(4.dp)
-        ) {
-            Text(
-                if (valor.isEmpty()) sugerencia else valor,
-                modifier = Modifier.weight(1f)
-            )
-            Text("⌄")
-        }
-
-        DropdownMenu(
-            expanded = expandido,
-            onDismissRequest = { expandido = false }
-        ) {
-            opciones.forEach { opcion ->
-                DropdownMenuItem(
-                    text = { Text(opcion) },
+                    Text(reporte.descripcion)
+                }
+            },
+            confirmButton = {
+                TextButton(
                     onClick = {
-                        alSeleccionar(opcion)
-                        expandido = false
+                        reporteSeleccionado = null
                     }
-                )
+                ) {
+                    Text("Cerrar")
+                }
             }
-        }
+        )
     }
 }

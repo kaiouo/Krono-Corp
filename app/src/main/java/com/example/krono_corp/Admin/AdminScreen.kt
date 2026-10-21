@@ -27,6 +27,8 @@ import com.example.krono_corp.components.AdminBottomBar
 import kotlinx.coroutines.launch
 import com.example.krono_corp.components.AdminRoutes
 
+import androidx.compose.runtime.mutableStateListOf
+
 
 // COLORES DE LA APLICACIÓN
 
@@ -170,6 +172,8 @@ fun AdminScreen() {
                     NuevoAdmin -> NuevoAdministradorScreen()
 
                     Historial -> HistorialReportesScreen()
+
+                   // AdminRoutes.VENTAS -> ReportesVentasScreen()
                 }
             }
         }
