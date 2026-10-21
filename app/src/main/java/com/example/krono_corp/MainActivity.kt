@@ -74,5 +74,31 @@ fun KronoCorpAppNav() {
                 negocioData = negocioDataState
             )
         }
+
+        // Modulo de Persona 4
+        composable(Screen.Asistente.route) {
+            AsistenteScreen(
+                navController = navController,
+                negocioData = negocioDataState
+            )
+        }
+        composable(Screen.HistorialReportes.route) {
+            HistorialReportesScreen(
+                navController = navController,
+                negocioData = negocioDataState
+            )
+        }
+        composable(Screen.HistorialGraficos.route) {
+            HistorialGraficosScreen(
+                navController = navController,
+                negocioData = negocioDataState
+            )
+        }
+        composable(Screen.NuevaCuentaAdmin.route) {
+            NuevaCuentaAdminScreen(
+                navController = navController,
+                negocioData = negocioDataState
+            )
+        }
     }
 }

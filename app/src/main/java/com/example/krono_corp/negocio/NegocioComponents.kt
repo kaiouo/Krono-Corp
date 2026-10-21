@@ -48,7 +48,7 @@ fun KronoBottomBar(
     ) {
         val items = listOf(
             Triple("Home", Icons.Outlined.Home, Screen.Home.route),
-            Triple("AI Chat", Icons.Outlined.ChatBubbleOutline, "ai_chat"),
+            Triple("AI Chat", Icons.Outlined.ChatBubbleOutline, Screen.Asistente.route),
             Triple("Ops", Icons.Outlined.Settings, Screen.Configuracion.route),
             Triple("Metrics", Icons.Outlined.TrendingUp, "metrics")
         )
@@ -75,8 +75,12 @@ fun KronoBottomBar(
                                 }
                             }
                         }
-                        "ai_chat" -> {
-                            Toast.makeText(context, "Módulo Asistente IA", Toast.LENGTH_SHORT).show()
+                        Screen.Asistente.route -> {
+                            if (currentRoute != Screen.Asistente.route) {
+                                navController.navigate(Screen.Asistente.route) {
+                                    launchSingleTop = true
+                                }
+                            }
                         }
                         "metrics" -> {
                             Toast.makeText(context, "Módulo de Métricas", Toast.LENGTH_SHORT).show()

@@ -45,7 +45,7 @@ fun HomeScreen(
         floatingActionButton = {
             // Botón flotante IA de Figma (esquina inferior derecha)
             FloatingActionButton(
-                onClick = { /* Módulo Asistente IA */ },
+                onClick = { navController.navigate(Screen.Asistente.route) },
                 containerColor = KronoBlue,
                 contentColor = Color.White,
                 shape = RoundedCornerShape(18.dp),
@@ -139,10 +139,18 @@ fun HomeScreen(
                 AccionCardItem("Sucursales", Icons.Outlined.Domain, KronoBlue) {
                     navController.navigate(Screen.Sucursales.route)
                 },
-                AccionCardItem("Asistente", Icons.Outlined.ChatBubbleOutline, Color(0xFF2F80ED)) {},
-                AccionCardItem("Historial de\nreportes", Icons.Outlined.Description, Color(0xFFF2994A)) {},
-                AccionCardItem("Historial de\nGráficos", Icons.Outlined.BarChart, Color(0xFF27AE60)) {},
-                AccionCardItem("Nueva cuenta de\nAdm.", Icons.Outlined.VpnKey, Color(0xFF9B51E0)) {}
+                AccionCardItem("Asistente", Icons.Outlined.ChatBubbleOutline, Color(0xFF2F80ED)) {
+                    navController.navigate(Screen.Asistente.route)
+                },
+                AccionCardItem("Historial de\nreportes", Icons.Outlined.Description, Color(0xFFF2994A)) {
+                    navController.navigate(Screen.HistorialReportes.route)
+                },
+                AccionCardItem("Historial de\nGráficos", Icons.Outlined.BarChart, Color(0xFF27AE60)) {
+                    navController.navigate(Screen.HistorialGraficos.route)
+                },
+                AccionCardItem("Nueva cuenta de\nAdm.", Icons.Outlined.VpnKey, Color(0xFF9B51E0)) {
+                    navController.navigate(Screen.NuevaCuentaAdmin.route)
+                }
             )
 
             LazyVerticalGrid(
