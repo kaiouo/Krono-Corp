@@ -80,7 +80,9 @@ fun RoleDropdown(
                 onDismissRequest = { expandido = false },
                 modifier = Modifier.background(Color.White)
             ) {
-                Rol.entries.forEach { rol ->
+                // El Gerente General no se autorregistra (lo pide el documento del proyecto):
+                // esa cuenta se crea directamente en Appwrite Console, por seguridad.
+                Rol.entries.filter { it != Rol.GERENTE }.forEach { rol ->
                     DropdownMenuItem(
                         text = { Text(rol.etiqueta, color = KronoColors.TextoOscuro) },
                         onClick = {

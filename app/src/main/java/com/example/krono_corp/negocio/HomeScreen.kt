@@ -35,7 +35,8 @@ data class AccionCardItem(
 @Composable
 fun HomeScreen(
     navController: NavController,
-    negocioData: NegocioData
+    negocioData: NegocioData,
+    onCerrarSesion: () -> Unit = {}
 ) {
     Scaffold(
         containerColor = KronoBackground,
@@ -138,6 +139,9 @@ fun HomeScreen(
                 },
                 AccionCardItem("Sucursales", Icons.Outlined.Domain, KronoBlue) {
                     navController.navigate(Screen.Sucursales.route)
+                },
+                AccionCardItem("Ventas e\ninventario", Icons.Outlined.PointOfSale, Color(0xFF1EB564)) {
+                    navController.navigate(Screen.Ventas.route)
                 },
                 AccionCardItem("Asistente", Icons.Outlined.ChatBubbleOutline, Color(0xFF2F80ED)) {
                     navController.navigate(Screen.Asistente.route)

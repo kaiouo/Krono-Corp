@@ -39,7 +39,8 @@ data class ConfigOptionFigma(
 @Composable
 fun ConfiguracionScreen(
     navController: NavController,
-    negocioData: NegocioData
+    negocioData: NegocioData,
+    onCerrarSesion: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -67,10 +68,7 @@ fun ConfiguracionScreen(
             Color(0xFFEB5757),
             isDestructive = true
         ) {
-            navController.navigate(Screen.Home.route) {
-                popUpTo(Screen.Home.route) { inclusive = false }
-                launchSingleTop = true
-            }
+            onCerrarSesion()
         }
     )
 

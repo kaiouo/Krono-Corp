@@ -26,6 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.NegocioRepository
+import com.example.krono_corp.data.ProductoInventarioRemoto
+import com.example.krono_corp.data.VentaRemota
 import kotlinx.coroutines.launch
 import java.text.Normalizer
 import java.time.LocalDateTime
@@ -33,37 +36,34 @@ import java.time.format.DateTimeFormatter
 
 // ==============================================================
 // Modulo de Persona 4: Asistente (ChatBot)
-// Version beta: las respuestas son simuladas y usan datos de ejemplo,
-// todavia no se conecta a ninguna IA real.
+// Las respuestas con numero/boton usan los datos reales de ventas e inventario que se
+// registran en la pantalla "Ventas e inventario" (coleccion "ventas" e "inventario" en
+// Appwrite). Las preguntas libres todavia son simuladas por palabra clave: aqui se
+// conectara una IA real mas adelante.
 // ==============================================================
-
-private data class VentaEjemplo(val producto: String, val cantidad: Int, val total: Double)
-private data class ProductoEjemplo(val nombre: String, val stock: Int)
-private data class MesEjemplo(val mes: String, val total: Double)
-
-private val ventasEjemplo = listOf(
-    VentaEjemplo("Camisa", 12, 180.00),
-    VentaEjemplo("Pantalón", 7, 175.00),
-    VentaEjemplo("Zapatos", 4, 200.00),
-    VentaEjemplo("Gorra", 15, 90.00)
-)
-
-private val inventarioEjemplo = listOf(
-    ProductoEjemplo("Camisa", 40),
-    ProductoEjemplo("Pantalón", 25),
-    ProductoEjemplo("Zapatos", 3),
-    ProductoEjemplo("Gorra", 60)
-)
-
-private val mesesEjemplo = listOf(
-    MesEjemplo("Enero", 1200.00),
-    MesEjemplo("Febrero", 950.00),
-    MesEjemplo("Marzo", 1580.00),
-    MesEjemplo("Abril", 1100.00)
-)
 
 private const val STOCK_BAJO = 5
 private val formatoFecha = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+private val MESES_ES = listOf(
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+)
+
+// La fecha se guarda como "dd/MM/yyyy HH:mm"; de ahi se saca el mes para agrupar ventas.
+private fun mesDeFecha(fecha: String): String? =
+    fecha.split("/").getOrNull(1)?.toIntOrNull()?.let { MESES_ES.getOrNull(it - 1) }
+
+// La coleccion "graficos" guarda los datos como texto plano (no hay un tipo JSON anidado):
+// "Camisa:12,Pantalón:7". Lo usan tanto el Asistente (al generar) como el Historial (al leer).
+fun codificarDatosGrafico(datos: List<Pair<String, Int>>): String =
+    datos.joinToString(",") { (etiqueta, valor) -> "${etiqueta.replace(":", "").replace(",", "")}:$valor" }
+
+fun decodificarDatosGrafico(texto: String): List<Pair<String, Int>> =
+    texto.split(",").mapNotNull { parte ->
+        val (etiqueta, valor) = parte.split(":").let { it.getOrNull(0) to it.getOrNull(1) }
+        val numero = valor?.toIntOrNull()
+        if (etiqueta.isNullOrBlank() || numero == null) null else etiqueta to numero
+    }
 
 private data class MensajeChat(
     val texto: String,
@@ -76,49 +76,63 @@ private fun formatoDinero(valor: Double) = "$${"%.2f".format(valor)}"
 private fun sinAcentos(texto: String): String =
     Normalizer.normalize(texto, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "").lowercase()
 
-private fun textoResumenVentas(): String = buildString {
-    appendLine("Resumen de ventas (datos de ejemplo):")
-    ventasEjemplo.forEach { appendLine("• ${it.producto}: ${it.cantidad} unidades — ${formatoDinero(it.total)}") }
-    append("Total vendido: ${formatoDinero(ventasEjemplo.sumOf { it.total })}")
+private fun textoResumenVentas(ventas: List<VentaRemota>): String {
+    if (ventas.isEmpty()) return "Aún no se ha registrado ninguna venta. Ve a \"Ventas e inventario\" para registrar la primera."
+    return buildString {
+        appendLine("Resumen de ventas:")
+        ventas.groupBy { it.producto }.forEach { (producto, lista) ->
+            appendLine("• $producto: ${lista.sumOf { it.cantidad }} unidades — ${formatoDinero(lista.sumOf { it.total })}")
+        }
+        append("Total vendido: ${formatoDinero(ventas.sumOf { it.total })}")
+    }
 }
 
-private fun textoProductoMasVendido(): String {
-    val top = ventasEjemplo.maxBy { it.cantidad }
-    return "El producto más vendido es ${top.producto}, con ${top.cantidad} unidades."
+private fun textoProductoMasVendido(ventas: List<VentaRemota>): String {
+    val top = ventas.groupBy { it.producto }
+        .mapValues { it.value.sumOf { v -> v.cantidad } }
+        .maxByOrNull { it.value }
+        ?: return "Aún no hay ventas registradas."
+    return "El producto más vendido es ${top.key}, con ${top.value} unidades."
 }
 
-private fun textoInventario(): String = buildString {
-    appendLine("Inventario (datos de ejemplo):")
-    inventarioEjemplo.forEach { appendLine("• ${it.nombre}: ${it.stock} unidades") }
-}.trim()
+private fun textoInventario(inventario: List<ProductoInventarioRemoto>): String {
+    if (inventario.isEmpty()) return "Aún no has registrado productos en el inventario."
+    return buildString {
+        appendLine("Inventario:")
+        inventario.forEach { appendLine("• ${it.nombre}: ${it.stock} unidades") }
+    }.trim()
+}
 
-private fun textoPocoStock(): String {
-    val bajos = inventarioEjemplo.filter { it.stock <= STOCK_BAJO }
+private fun textoPocoStock(inventario: List<ProductoInventarioRemoto>): String {
+    if (inventario.isEmpty()) return "Aún no has registrado productos en el inventario."
+    val bajos = inventario.filter { it.stock <= STOCK_BAJO }
     if (bajos.isEmpty()) return "Todos los productos tienen stock suficiente."
     return "Productos con poco stock ($STOCK_BAJO o menos):\n" +
         bajos.joinToString("\n") { "• ${it.nombre}: quedan ${it.stock} unidades" }
 }
 
-private fun textoMeses(): String {
-    val mejor = mesesEjemplo.maxBy { it.total }
-    val lista = mesesEjemplo.sortedByDescending { it.total }
-        .joinToString("\n") { "• ${it.mes}: ${formatoDinero(it.total)}" }
-    return "Meses con mayores ventas (datos de ejemplo):\n$lista\n\nEl mejor mes fue ${mejor.mes}."
+private fun textoMeses(ventas: List<VentaRemota>): String {
+    val porMes = ventas.mapNotNull { v -> mesDeFecha(v.fecha)?.let { it to v.total } }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { it.value.sum() }
+    val mejor = porMes.maxByOrNull { it.value } ?: return "Aún no hay suficientes ventas registradas para calcular los meses."
+    val lista = porMes.entries.sortedByDescending { it.value }.joinToString("\n") { "• ${it.key}: ${formatoDinero(it.value)}" }
+    return "Meses con mayores ventas:\n$lista\n\nEl mejor mes fue ${mejor.key}."
 }
 
-// Respuesta simulada para una pregunta libre o configurada por el negocio.
-// Aqui se conectara la IA mas adelante.
-private fun responderPregunta(pregunta: String): String {
+// Respuesta simulada para una pregunta libre o configurada por el negocio, construida con
+// los datos reales de ventas e inventario. Aqui se conectara una IA real mas adelante.
+private fun responderPregunta(pregunta: String, ventas: List<VentaRemota>, inventario: List<ProductoInventarioRemoto>): String {
     val p = sinAcentos(pregunta)
     return when {
-        Regex("\\bmes(es)?\\b").containsMatchIn(p) -> textoMeses()
-        "poco" in p && "stock" in p -> textoPocoStock()
-        "vendido" in p || "producto" in p -> textoProductoMasVendido()
-        "venta" in p -> textoResumenVentas()
-        "inventario" in p || "stock" in p -> textoInventario()
+        Regex("\\bmes(es)?\\b").containsMatchIn(p) -> textoMeses(ventas)
+        "poco" in p && "stock" in p -> textoPocoStock(inventario)
+        "vendido" in p || "producto" in p -> textoProductoMasVendido(ventas)
+        "venta" in p -> textoResumenVentas(ventas)
+        "inventario" in p || "stock" in p -> textoInventario(inventario)
         "reporte" in p -> "Puedo generar un reporte de ventas. Toca el botón \"Generar reporte\" aquí abajo."
         "grafico" in p -> "Puedo generar un gráfico de ventas. Toca el botón \"Generar gráfico\" aquí abajo."
-        else -> "Soy Krono (beta). Todavía no puedo responder eso libremente, pero pronto podré analizar los datos reales del negocio. Por ahora prueba con una de las opciones de abajo."
+        else -> "Soy Krono. Todavía no puedo responder eso libremente, pero sí puedo mostrarte los datos reales de tu negocio con las opciones de abajo."
     }
 }
 
@@ -137,13 +151,22 @@ fun AsistenteScreen(
         )
     }
     var textoEntrada by remember { mutableStateOf("") }
+    var ventas by remember { mutableStateOf<List<VentaRemota>>(emptyList()) }
+    var inventario by remember { mutableStateOf<List<ProductoInventarioRemoto>>(emptyList()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // Carga las ventas y el inventario reales del negocio para que el Asistente responda con ellos
+    LaunchedEffect(negocioData.id) {
+        if (negocioData.id.isEmpty()) return@LaunchedEffect
+        NegocioRepository.listarVentas(negocioData.id).onSuccess { ventas = it }
+        NegocioRepository.listarInventario(negocioData.id).onSuccess { inventario = it }
+    }
 
     fun enviarUsuario(texto: String) {
         if (texto.isBlank()) return
         mensajes.add(MensajeChat(texto.trim(), esUsuario = true))
-        mensajes.add(MensajeChat(responderPregunta(texto), esUsuario = false))
+        mensajes.add(MensajeChat(responderPregunta(texto, ventas, inventario), esUsuario = false))
         scope.launch { listState.animateScrollToItem(mensajes.lastIndex) }
     }
 
@@ -179,7 +202,7 @@ fun AsistenteScreen(
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
             Text(
-                text = "Versión beta — respuestas simuladas con datos de ejemplo",
+                text = "Analiza las ventas y el inventario reales de tu negocio",
                 fontSize = 12.sp,
                 color = KronoTextMuted,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
@@ -249,29 +272,57 @@ fun AsistenteScreen(
                     izquierda = "Generar reporte" to Icons.Outlined.Description,
                     derecha = "Generar gráfico" to Icons.Outlined.BarChart,
                     alPulsarIzquierda = {
-                        val contenido = textoResumenVentas()
-                        val nuevo = ReporteGenerado(
-                            id = (negocioData.historialReportes.maxOfOrNull { it.id } ?: 0) + 1,
-                            titulo = "Reporte de ventas",
-                            fecha = LocalDateTime.now().format(formatoFecha),
-                            contenido = contenido
-                        )
-                        negocioData.historialReportes.add(0, nuevo)
-                        agregarRespuestaBot("Listo, generé el reporte y lo guardé en el historial de reportes.\n\n$contenido")
+                        if (ventas.isEmpty()) {
+                            agregarRespuestaBot("Aún no hay ventas registradas para generar un reporte. Ve a \"Ventas e inventario\" primero.")
+                        } else {
+                            val contenido = textoResumenVentas(ventas)
+                            val fecha = LocalDateTime.now().format(formatoFecha)
+                            scope.launch {
+                                NegocioRepository.crearReporte(
+                                    scope = "negocio",
+                                    ownerId = negocioData.ownerId,
+                                    titulo = "Reporte de ventas",
+                                    fecha = fecha,
+                                    contenido = contenido
+                                ).onSuccess { remoto ->
+                                    negocioData.historialReportes.add(
+                                        0,
+                                        ReporteGenerado(remoto.id, remoto.titulo, remoto.fecha, remoto.contenido)
+                                    )
+                                    agregarRespuestaBot("Listo, generé el reporte y lo guardé en el historial de reportes.\n\n$contenido")
+                                }.onFailure { e ->
+                                    agregarRespuestaBot("No pude guardar el reporte: ${e.message}")
+                                }
+                            }
+                        }
                     },
                     alPulsarDerecha = {
-                        val datos = ventasEjemplo.map { it.producto to it.cantidad }
-                        val nuevo = GraficoGenerado(
-                            id = (negocioData.historialGraficos.maxOfOrNull { it.id } ?: 0) + 1,
-                            titulo = "Gráfico de ventas por producto",
-                            fecha = LocalDateTime.now().format(formatoFecha),
-                            datos = datos
-                        )
-                        negocioData.historialGraficos.add(0, nuevo)
-                        agregarRespuestaBot(
-                            "Listo, generé el gráfico de unidades vendidas por producto y lo guardé en el historial de gráficos.",
-                            grafico = datos
-                        )
+                        val datos = ventas.groupBy { it.producto }.map { (p, lista) -> p to lista.sumOf { it.cantidad } }
+                        if (datos.isEmpty()) {
+                            agregarRespuestaBot("Aún no hay ventas registradas para generar un gráfico. Ve a \"Ventas e inventario\" primero.")
+                        } else {
+                            val fecha = LocalDateTime.now().format(formatoFecha)
+                            scope.launch {
+                                NegocioRepository.crearGrafico(
+                                    scope = "negocio",
+                                    ownerId = negocioData.ownerId,
+                                    titulo = "Gráfico de ventas por producto",
+                                    fecha = fecha,
+                                    datosCodificados = codificarDatosGrafico(datos)
+                                ).onSuccess { remoto ->
+                                    negocioData.historialGraficos.add(
+                                        0,
+                                        GraficoGenerado(remoto.id, remoto.titulo, remoto.fecha, datos)
+                                    )
+                                    agregarRespuestaBot(
+                                        "Listo, generé el gráfico de unidades vendidas por producto y lo guardé en el historial de gráficos.",
+                                        grafico = datos
+                                    )
+                                }.onFailure { e ->
+                                    agregarRespuestaBot("No pude guardar el gráfico: ${e.message}")
+                                }
+                            }
+                        }
                     }
                 )
                 Spacer(Modifier.height(8.dp))

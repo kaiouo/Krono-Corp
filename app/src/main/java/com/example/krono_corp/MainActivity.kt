@@ -5,9 +5,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -21,7 +29,9 @@ import com.example.krono_corp.Login.RegisterScreen
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AppwriteClient
 import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.NegocioRepository
 import com.example.krono_corp.data.Rol
+import com.example.krono_corp.negocio.SucursalItem
 import com.example.krono_corp.negocio.AsistenteScreen
 import com.example.krono_corp.negocio.ConfiguracionScreen
 import com.example.krono_corp.negocio.HistorialGraficosScreen
@@ -30,6 +40,7 @@ import com.example.krono_corp.negocio.HomeScreen
 import com.example.krono_corp.negocio.MiNegocioScreen
 import com.example.krono_corp.negocio.NegocioData
 import com.example.krono_corp.negocio.NuevaCuentaAdminScreen
+import com.example.krono_corp.negocio.RegistroVentasScreen
 import com.example.krono_corp.negocio.Screen
 import com.example.krono_corp.negocio.SucursalesScreen
 import kotlinx.coroutines.launch
@@ -117,6 +128,19 @@ private fun PantallaCargando() {
     }
 }
 
+@Composable
+private fun PantallaError(mensaje: String, alCerrarSesion: () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(mensaje, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(onClick = alCerrarSesion) {
+                Text("Cerrar sesión")
+            }
+        }
+    }
+}
+
 /**
  * Flujo de DUENO y SUPERVISOR: todas las pantallas del paquete "negocio"
  * comparten un NavController y un mismo NegocioData.
@@ -127,10 +151,45 @@ private fun NegocioNavHost(
     alCerrarSesion: () -> Unit
 ) {
     val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
 
     // Un único objeto compartido por todas las pantallas (sus listas son mutables)
     val negocio = remember(usuario.id) {
         NegocioData(propietarioEmail = usuario.email)
+    }
+    var cargandoNegocio by remember(usuario.id) { mutableStateOf(true) }
+    var errorNegocio by remember(usuario.id) { mutableStateOf("") }
+
+    // Carga (o crea, si es la primera vez) el negocio real del usuario en Appwrite,
+    // junto con sus sucursales. Antes de esto, negocio.id está vacío.
+    LaunchedEffect(usuario.id) {
+        NegocioRepository.obtenerOCrearNegocio(usuario.id, usuario.email)
+            .onSuccess { remoto ->
+                negocio.id = remoto.id
+                negocio.ownerId = remoto.ownerId
+                negocio.nombreNegocio = remoto.nombreNegocio
+                negocio.preguntasIA.clear()
+                negocio.preguntasIA.addAll(remoto.preguntasIA)
+
+                NegocioRepository.listarSucursales(remoto.id).onSuccess { sucursales ->
+                    negocio.sucursales.clear()
+                    negocio.sucursales.addAll(
+                        sucursales.map { SucursalItem(it.id, it.nombre, it.activa, it.codigoAcceso) }
+                    )
+                }
+                errorNegocio = ""
+            }
+            .onFailure { e -> errorNegocio = e.message ?: "No se pudo cargar el negocio." }
+        cargandoNegocio = false
+    }
+
+    if (cargandoNegocio) {
+        PantallaCargando()
+        return
+    }
+    if (errorNegocio.isNotBlank()) {
+        PantallaError(mensaje = errorNegocio, alCerrarSesion = alCerrarSesion)
+        return
     }
 
     NavHost(
@@ -145,6 +204,10 @@ private fun NegocioNavHost(
             )
         }
 
+        composable(Screen.Ventas.route) {
+            RegistroVentasScreen(navController = navController, negocioData = negocio)
+        }
+
         composable(Screen.MiNegocio.route) {
             MiNegocioScreen(
                 navController = navController,
@@ -153,12 +216,29 @@ private fun NegocioNavHost(
                     negocio.nombreNegocio = nombre
                     negocio.preguntasIA.clear()
                     negocio.preguntasIA.addAll(preguntas)
+                    scope.launch {
+                        NegocioRepository.actualizarNegocio(negocio.id, nombre, preguntas)
+                    }
                 }
             )
         }
 
         composable(Screen.Sucursales.route) {
-            SucursalesScreen(navController = navController, negocioData = negocio)
+            SucursalesScreen(
+                navController = navController,
+                negocioData = negocio,
+                onGuardarSucursales = { lista ->
+                    negocio.sucursales.clear()
+                    negocio.sucursales.addAll(lista)
+                    scope.launch {
+                        NegocioRepository.reemplazarSucursales(
+                            negocioId = negocio.id,
+                            ownerId = negocio.ownerId,
+                            nuevas = lista.map { Triple(it.id, it.nombre, it.activa to it.codigoAcceso) }
+                        )
+                    }
+                }
+            )
         }
 
         composable(Screen.Configuracion.route) {

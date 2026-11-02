@@ -25,6 +25,7 @@ object AdminRoutes {
     const val EVALUACION = "Evaluación de Administrador"
 
     const val HISTORIAL = "Historial de reportes"
+    const val HISTORIAL_GRAFICOS = "Historial de gráficos"
     const val ASISTENTE = "Asistente"
 
     const val NUEVO_ADMIN = "Añadir Admin"

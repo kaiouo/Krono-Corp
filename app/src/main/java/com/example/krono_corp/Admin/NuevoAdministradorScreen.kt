@@ -9,7 +9,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.Rol
+import kotlinx.coroutines.launch
 
+// Crea una cuenta real en Appwrite (Auth + perfil en "usuarios") con rol SUPERVISOR:
+// esto es lo que la pantalla de Evaluación de administradores lista despues.
 @Composable
 fun NuevoAdministradorScreen() {
     var nombre by remember { mutableStateOf("") }
@@ -17,6 +22,9 @@ fun NuevoAdministradorScreen() {
     var telefono by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var mensaje by remember { mutableStateOf("") }
+    var esError by remember { mutableStateOf(false) }
+    var guardando by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -60,25 +68,51 @@ fun NuevoAdministradorScreen() {
         )
 
         if (mensaje.isNotBlank()) {
-            Text(mensaje, color = MaterialTheme.colorScheme.primary)
+            Text(mensaje, color = if (esError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
         }
 
         Button(
             onClick = {
-                mensaje = if (
-                    nombre.isBlank() ||
-                    correo.isBlank() ||
-                    telefono.isBlank() ||
-                    password.isBlank()
-                ) {
-                    "Completa todos los campos."
-                } else {
-                    "Formulario de prueba completado."
+                when {
+                    nombre.isBlank() || correo.isBlank() || telefono.isBlank() || password.isBlank() -> {
+                        mensaje = "Completa todos los campos."
+                        esError = true
+                    }
+                    password.length < 8 -> {
+                        mensaje = "La contraseña debe tener al menos 8 caracteres (lo exige Appwrite)."
+                        esError = true
+                    }
+                    else -> {
+                        guardando = true
+                        mensaje = ""
+                        scope.launch {
+                            AuthRepository.register(
+                                email = correo.trim(),
+                                phone = telefono.trim(),
+                                password = password,
+                                rol = Rol.SUPERVISOR,
+                                aliasPersonalizado = nombre.trim()
+                            ).onSuccess {
+                                mensaje = "Administrador \"${it.alias}\" creado correctamente."
+                                esError = false
+                                nombre = ""; correo = ""; telefono = ""; password = ""
+                            }.onFailure { e ->
+                                mensaje = e.message ?: "No se pudo crear el administrador."
+                                esError = true
+                            }
+                            guardando = false
+                        }
+                    }
                 }
             },
+            enabled = !guardando,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Guardar administrador")
+            if (guardando) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Text("Guardar administrador")
+            }
         }
 
         OutlinedButton(

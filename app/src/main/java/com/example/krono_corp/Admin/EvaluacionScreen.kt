@@ -6,29 +6,34 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.Rol
 
-private data class AdminDemo(
-    val nombre: String,
-    val correo: String,
-    val telefono: String
-)
-
+// Lista real de administradores (usuarios con rol SUPERVISOR), leida de Appwrite.
 @Composable
 fun EvaluacionScreen() {
     var busqueda by remember { mutableStateOf("") }
+    var cargando by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf("") }
+    var supervisores by remember { mutableStateOf<List<AppUser>>(emptyList()) }
 
-    val administradores = listOf(
-        AdminDemo("Elena Castro", "elena@ejemplo.com", "7000-1001"),
-        AdminDemo("Marcus Ruiz", "marcus@ejemplo.com", "7000-1002"),
-        AdminDemo("Sofía Hernández", "sofia@ejemplo.com", "7000-1003")
-    ).filter {
-        it.nombre.contains(busqueda, true) ||
-                it.correo.contains(busqueda, true)
+    LaunchedEffect(Unit) {
+        cargando = true
+        AuthRepository.listarPorRol(Rol.SUPERVISOR)
+            .onSuccess { supervisores = it; error = "" }
+            .onFailure { e -> error = e.message ?: "No se pudo cargar la lista de administradores." }
+        cargando = false
+    }
+
+    val administradores = supervisores.filter {
+        it.alias.contains(busqueda, true) || it.email.contains(busqueda, true)
     }
 
     Column(
@@ -58,28 +63,31 @@ fun EvaluacionScreen() {
 
         Spacer(Modifier.height(12.dp))
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(administradores) { admin ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.White
-                    )
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            admin.nombre,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 17.sp
+        when {
+            cargando -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            error.isNotBlank() -> Text(error, color = Color(0xFFEB5757))
+            administradores.isEmpty() -> Text("Todavía no hay administradores registrados.", color = Color.Gray)
+            else -> LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(administradores, key = { it.id }) { admin ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.White
                         )
-                        Text("Correo: ${admin.correo}")
-                        Text("Teléfono: ${admin.telefono}")
-                        Text(
-                            "Estado: Datos de demostración",
-                            color = Color(0xFF1260C4)
-                        )
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                admin.alias,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp
+                            )
+                            Text("Correo: ${admin.email}")
+                            Text("Teléfono: ${admin.phone}")
+                        }
                     }
                 }
             }

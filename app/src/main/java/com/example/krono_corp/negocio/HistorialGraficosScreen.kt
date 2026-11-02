@@ -20,8 +20,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.NegocioRepository
 
 // Modulo de Persona 4: historial de los graficos que el Asistente ha generado para este negocio.
+// Se lee de la coleccion "graficos" en Appwrite al abrir la pantalla.
 
 @Composable
 fun HistorialGraficosScreen(
@@ -29,6 +31,23 @@ fun HistorialGraficosScreen(
     negocioData: NegocioData
 ) {
     var seleccionado by remember { mutableStateOf<GraficoGenerado?>(null) }
+    var cargando by remember { mutableStateOf(true) }
+    var errorCarga by remember { mutableStateOf("") }
+
+    LaunchedEffect(negocioData.id) {
+        if (negocioData.id.isEmpty()) return@LaunchedEffect
+        cargando = true
+        NegocioRepository.listarGraficos(scope = "negocio", ownerId = negocioData.ownerId)
+            .onSuccess { remotos ->
+                negocioData.historialGraficos.clear()
+                negocioData.historialGraficos.addAll(
+                    remotos.map { GraficoGenerado(it.id, it.titulo, it.fecha, decodificarDatosGrafico(it.datosCodificados)) }
+                )
+                errorCarga = ""
+            }
+            .onFailure { e -> errorCarga = e.message ?: "No se pudo cargar el historial." }
+        cargando = false
+    }
 
     Scaffold(
         containerColor = Color.White,
@@ -71,7 +90,17 @@ fun HistorialGraficosScreen(
                 }
             }
 
-            if (negocioData.historialGraficos.isEmpty()) {
+            if (cargando) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = KronoBlue)
+                    }
+                }
+            } else if (errorCarga.isNotBlank()) {
+                item {
+                    Text(errorCarga, color = Color(0xFFEB5757), modifier = Modifier.padding(vertical = 16.dp))
+                }
+            } else if (negocioData.historialGraficos.isEmpty()) {
                 item {
                     EstadoVacioHistorial(
                         mensaje = "Aún no has generado ningún gráfico.",

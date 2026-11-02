@@ -20,9 +20,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.NegocioRepository
+import kotlinx.coroutines.launch
 
 // Modulo de Persona 4: permite crear otra cuenta para administrar el mismo negocio
 // sin tener que ingresar otro correo electronico (usa el correo del negocio).
+// Las cuentas se guardan y se leen de la coleccion "cuentas_administracion" en Appwrite.
 
 private const val CONTRASENA_MINIMA = 4
 
@@ -36,12 +39,26 @@ fun NuevaCuentaAdminScreen(
     var confirmar by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var mensajeExito by remember { mutableStateOf("") }
+    var guardando by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // Carga las cuentas ya creadas para este negocio al abrir la pantalla
+    LaunchedEffect(negocioData.id) {
+        if (negocioData.id.isEmpty()) return@LaunchedEffect
+        NegocioRepository.listarCuentasAdministracion(negocioData.id).onSuccess { remotas ->
+            negocioData.cuentasAdicionales.clear()
+            negocioData.cuentasAdicionales.addAll(
+                remotas.map { CuentaAdministracion(it.id, it.nombre, it.password) }
+            )
+        }
+    }
 
     fun validarYCrear() {
         mensajeExito = ""
         val nombreLimpio = nombre.trim()
 
         when {
+            negocioData.id.isEmpty() -> error = "Todavía se está cargando el negocio, espera un momento."
             nombreLimpio.isEmpty() -> error = "El nombre no puede estar vacío."
             negocioData.cuentasAdicionales.any { it.nombre.equals(nombreLimpio, ignoreCase = true) } ->
                 error = "Ya existe una cuenta con el nombre \"$nombreLimpio\"."
@@ -51,12 +68,27 @@ fun NuevaCuentaAdminScreen(
             negocioData.cuentasAdicionales.any { it.password.equals(password, ignoreCase = true) } ->
                 error = "Esa contraseña ya la usa otra cuenta de este negocio. Elige una distinta."
             else -> {
-                negocioData.cuentasAdicionales.add(CuentaAdministracion(nombreLimpio, password))
                 error = ""
-                mensajeExito = "Cuenta \"$nombreLimpio\" creada correctamente."
-                nombre = ""
-                password = ""
-                confirmar = ""
+                guardando = true
+                scope.launch {
+                    NegocioRepository.crearCuentaAdministracion(
+                        negocioId = negocioData.id,
+                        ownerId = negocioData.ownerId,
+                        nombre = nombreLimpio,
+                        password = password
+                    ).onSuccess { remota ->
+                        negocioData.cuentasAdicionales.add(
+                            CuentaAdministracion(remota.id, remota.nombre, remota.password)
+                        )
+                        mensajeExito = "Cuenta \"$nombreLimpio\" creada correctamente."
+                        nombre = ""
+                        password = ""
+                        confirmar = ""
+                    }.onFailure { e ->
+                        error = e.message ?: "No se pudo crear la cuenta."
+                    }
+                    guardando = false
+                }
             }
         }
     }
@@ -159,13 +191,18 @@ fun NuevaCuentaAdminScreen(
             item {
                 Button(
                     onClick = { validarYCrear() },
+                    enabled = !guardando,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
                 ) {
-                    Text("Crear cuenta", fontWeight = FontWeight.Bold)
+                    if (guardando) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("Crear cuenta", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 

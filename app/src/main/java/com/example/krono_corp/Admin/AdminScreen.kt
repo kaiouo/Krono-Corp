@@ -41,12 +41,13 @@ private val Panel = AdminRoutes.PANEL
 private val Evaluacion = AdminRoutes.EVALUACION
 private val NuevoAdmin = AdminRoutes.NUEVO_ADMIN
 private val Historial = AdminRoutes.HISTORIAL
+private val HistorialGraficos = AdminRoutes.HISTORIAL_GRAFICOS
 private val Asistente = AdminRoutes.ASISTENTE
 
 // PANTALLA PRINCIPAL Y NAVEGACIÓN
 
 @Composable
-fun AdminScreen() {
+fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
 
     var pantalla by remember { mutableStateOf(Panel) }
 
@@ -103,7 +104,8 @@ fun AdminScreen() {
                     Asistente,
                     Evaluacion,
                     NuevoAdmin,
-                    Historial
+                    Historial,
+                    HistorialGraficos
                 )
 
                 opciones.forEach { opcion ->
@@ -123,6 +125,16 @@ fun AdminScreen() {
                         )
                     )
                 }
+
+                NavigationDrawerItem(
+                    label = { Text("Cerrar sesión") },
+                    selected = false,
+                    onClick = { alCerrarSesion() },
+                    modifier = Modifier.padding(
+                        horizontal = 12.dp,
+                        vertical = 3.dp
+                    )
+                )
             }
         }
     ) {
@@ -172,6 +184,8 @@ fun AdminScreen() {
                     NuevoAdmin -> NuevoAdministradorScreen()
 
                     Historial -> HistorialReportesScreen()
+
+                    HistorialGraficos -> HistorialGraficosScreen()
 
                    // AdminRoutes.VENTAS -> ReportesVentasScreen()
                 }
@@ -255,6 +269,26 @@ private fun PanelControl(
             ) {
                 abrirPantalla(NuevoAdmin)
             }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // TERCERA FILA
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            TarjetaAdmin(
+                titulo = "Historial de gráficos",
+                icono = Icons.Default.Assessment,
+                colorIcono = Color(0xFF27AE60),
+                modifier = Modifier.weight(1f)
+            ) {
+                abrirPantalla(HistorialGraficos)
+            }
+
+            Spacer(Modifier.weight(1f))
         }
     }
 }

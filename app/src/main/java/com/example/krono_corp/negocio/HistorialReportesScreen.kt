@@ -20,8 +20,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.NegocioRepository
 
 // Modulo de Persona 4: historial de los reportes que el Asistente ha generado para este negocio.
+// Se lee de la coleccion "reportes" en Appwrite al abrir la pantalla, no solo de lo que haya
+// quedado en memoria durante la sesion actual.
 
 @Composable
 fun HistorialReportesScreen(
@@ -30,6 +33,23 @@ fun HistorialReportesScreen(
 ) {
     var busqueda by remember { mutableStateOf("") }
     var seleccionado by remember { mutableStateOf<ReporteGenerado?>(null) }
+    var cargando by remember { mutableStateOf(true) }
+    var errorCarga by remember { mutableStateOf("") }
+
+    LaunchedEffect(negocioData.id) {
+        if (negocioData.id.isEmpty()) return@LaunchedEffect
+        cargando = true
+        NegocioRepository.listarReportes(scope = "negocio", ownerId = negocioData.ownerId)
+            .onSuccess { remotos ->
+                negocioData.historialReportes.clear()
+                negocioData.historialReportes.addAll(
+                    remotos.map { ReporteGenerado(it.id, it.titulo, it.fecha, it.contenido) }
+                )
+                errorCarga = ""
+            }
+            .onFailure { e -> errorCarga = e.message ?: "No se pudo cargar el historial." }
+        cargando = false
+    }
 
     val filtrados = negocioData.historialReportes.filter {
         it.titulo.contains(busqueda, ignoreCase = true)
@@ -103,7 +123,17 @@ fun HistorialReportesScreen(
                 }
             }
 
-            if (negocioData.historialReportes.isEmpty()) {
+            if (cargando) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = KronoBlue)
+                    }
+                }
+            } else if (errorCarga.isNotBlank()) {
+                item {
+                    Text(errorCarga, color = Color(0xFFEB5757), modifier = Modifier.padding(vertical = 16.dp))
+                }
+            } else if (negocioData.historialReportes.isEmpty()) {
                 item {
                     EstadoVacioHistorial(
                         mensaje = "Aún no has generado ningún reporte.",
