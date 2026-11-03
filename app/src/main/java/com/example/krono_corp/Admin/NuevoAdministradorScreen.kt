@@ -1,131 +1,138 @@
-
 package com.example.krono_corp.Admin
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.data.AuthRepository
-import com.example.krono_corp.data.Rol
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.CuentaSupervisor
+import com.example.krono_corp.data.EQUIPOS
+import com.example.krono_corp.data.GerenteRepository
 import kotlinx.coroutines.launch
 
-// Crea una cuenta real en Appwrite (Auth + perfil en "usuarios") con rol SUPERVISOR:
-// esto es lo que la pantalla de Evaluación de administradores lista despues.
+/**
+ * "Nuevo supervisor": el gerente asigna a su equipo las cuentas que se registraron
+ * con el rol Supervisor de Ventas y todavía no tienen gerente.
+ */
 @Composable
-fun NuevoAdministradorScreen() {
-    var nombre by remember { mutableStateOf("") }
-    var correo by remember { mutableStateOf("") }
-    var telefono by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var mensaje by remember { mutableStateOf("") }
-    var esError by remember { mutableStateOf(false) }
-    var guardando by remember { mutableStateOf(false) }
+fun NuevoAdministradorScreen(usuario: AppUser) {
+    var cargando by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var exito by remember { mutableStateOf<String?>(null) }
+    var pendientes by remember { mutableStateOf<List<CuentaSupervisor>>(emptyList()) }
+    var ocupadoId by remember { mutableStateOf<String?>(null) }
+    var recarga by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    Column(
+    LaunchedEffect(recarga) {
+        cargando = true
+        GerenteRepository.sinAsignar()
+            .onSuccess { pendientes = it; error = null }
+            .onFailure { error = it.message }
+        cargando = false
+    }
+
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        Text(
-            "Nuevo administrador",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        OutlinedTextField(
-            value = nombre,
-            onValueChange = { nombre = it },
-            label = { Text("Nombre completo") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        OutlinedTextField(
-            value = correo,
-            onValueChange = { correo = it },
-            label = { Text("Correo electrónico") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        OutlinedTextField(
-            value = telefono,
-            onValueChange = { telefono = it },
-            label = { Text("Teléfono") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Contraseña") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        if (mensaje.isNotBlank()) {
-            Text(mensaje, color = if (esError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+        item {
+            Text("Nuevo supervisor", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = AdminTexto)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Un supervisor se registra desde la pantalla de registro de la app eligiendo el rol " +
+                        "«Supervisor de Ventas». Cuando lo haga, aparecerá aquí para que lo asignes a tu " +
+                        "equipo y a una sucursal.",
+                fontSize = 13.sp,
+                color = AdminGris
+            )
+            TextButton(onClick = { recarga++ }, enabled = !cargando) { Text("Actualizar lista") }
         }
 
-        Button(
-            onClick = {
-                when {
-                    nombre.isBlank() || correo.isBlank() || telefono.isBlank() || password.isBlank() -> {
-                        mensaje = "Completa todos los campos."
-                        esError = true
-                    }
-                    password.length < 8 -> {
-                        mensaje = "La contraseña debe tener al menos 8 caracteres (lo exige Appwrite)."
-                        esError = true
-                    }
-                    else -> {
-                        guardando = true
-                        mensaje = ""
-                        scope.launch {
-                            AuthRepository.register(
-                                email = correo.trim(),
-                                phone = telefono.trim(),
-                                password = password,
-                                rol = Rol.SUPERVISOR,
-                                aliasPersonalizado = nombre.trim()
-                            ).onSuccess {
-                                mensaje = "Administrador \"${it.alias}\" creado correctamente."
-                                esError = false
-                                nombre = ""; correo = ""; telefono = ""; password = ""
-                            }.onFailure { e ->
-                                mensaje = e.message ?: "No se pudo crear el administrador."
-                                esError = true
-                            }
-                            guardando = false
-                        }
-                    }
-                }
-            },
-            enabled = !guardando,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (guardando) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else {
-                Text("Guardar administrador")
+        if (cargando) item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+        error?.let { mensaje -> item { Text(mensaje, color = AdminRojo, fontSize = 13.sp) } }
+        exito?.let { mensaje ->
+            item { Text(mensaje, color = AdminVerde, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+        }
+
+        if (!cargando && error == null && pendientes.isEmpty()) {
+            item {
+                TextoVacio(
+                    "No hay cuentas de supervisor pendientes. Pídele a la persona que se registre " +
+                            "con el rol «Supervisor de Ventas» y toca «Actualizar lista»."
+                )
             }
         }
 
-        OutlinedButton(
-            onClick = {
-                nombre = ""
-                correo = ""
-                telefono = ""
-                password = ""
-                mensaje = ""
-            },
-            modifier = Modifier.fillMaxWidth()
+        items(pendientes, key = { it.id }) { cuenta ->
+            FilaSinAsignar(
+                cuenta = cuenta,
+                ocupado = ocupadoId == cuenta.id,
+                alAsignar = { sucursal ->
+                    scope.launch {
+                        ocupadoId = cuenta.id
+                        exito = null
+                        error = null
+                        GerenteRepository.asignar(cuenta.id, usuario.id, sucursal)
+                            .onSuccess {
+                                exito = "${cuenta.alias} ahora es supervisor de la sucursal $sucursal."
+                                recarga++
+                            }
+                            .onFailure { error = it.message }
+                        ocupadoId = null
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun FilaSinAsignar(
+    cuenta: CuentaSupervisor,
+    ocupado: Boolean,
+    alAsignar: (String) -> Unit
+) {
+    var sucursal by remember(cuenta.id) { mutableStateOf(EQUIPOS.first()) }
+
+    TarjetaBlanca {
+        Text(cuenta.alias, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AdminTexto)
+        Text(cuenta.email, fontSize = 13.sp, color = AdminGris)
+        if (cuenta.phone.isNotBlank()) Text(cuenta.phone, fontSize = 13.sp, color = AdminGris)
+        Spacer(Modifier.height(10.dp))
+        SucursalDropdown(seleccionada = sucursal, alSeleccionar = { sucursal = it })
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { alAsignar(sucursal) },
+            enabled = !ocupado,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = AdminAzul)
         ) {
-            Text("Limpiar")
+            Text(if (ocupado) "Asignando…" else "Asignar a mi equipo")
         }
     }
 }
