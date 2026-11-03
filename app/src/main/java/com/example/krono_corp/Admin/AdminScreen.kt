@@ -26,6 +26,7 @@ import com.example.krono_corp.components.AdminTopBar
 import com.example.krono_corp.components.AdminBottomBar
 import kotlinx.coroutines.launch
 import com.example.krono_corp.components.AdminRoutes
+import com.example.krono_corp.data.AppUser
 
 import androidx.compose.runtime.mutableStateListOf
 
@@ -41,13 +42,12 @@ private val Panel = AdminRoutes.PANEL
 private val Evaluacion = AdminRoutes.EVALUACION
 private val NuevoAdmin = AdminRoutes.NUEVO_ADMIN
 private val Historial = AdminRoutes.HISTORIAL
-private val HistorialGraficos = AdminRoutes.HISTORIAL_GRAFICOS
 private val Asistente = AdminRoutes.ASISTENTE
 
 // PANTALLA PRINCIPAL Y NAVEGACIÓN
 
 @Composable
-fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
+fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
 
     var pantalla by remember { mutableStateOf(Panel) }
 
@@ -78,19 +78,19 @@ fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
                 Spacer(Modifier.height(20.dp))
 
                 Text(
-                    text = "👤  Usuario Admin",
+                    text = "👤  ${usuario.alias}",
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
 
                 Text(
-                    text = "     Gerente de Operaciones",
+                    text = "     ${usuario.role.etiqueta}",
                     color = Gris,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
 
                 Text(
-                    text = "     División HQ",
+                    text = "     ${usuario.email}",
                     color = Gris,
                     modifier = Modifier.padding(horizontal = 20.dp)
                 )
@@ -104,8 +104,7 @@ fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
                     Asistente,
                     Evaluacion,
                     NuevoAdmin,
-                    Historial,
-                    HistorialGraficos
+                    Historial
                 )
 
                 opciones.forEach { opcion ->
@@ -126,14 +125,16 @@ fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
                     )
                 }
 
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
                 NavigationDrawerItem(
                     label = { Text("Cerrar sesión") },
                     selected = false,
-                    onClick = { alCerrarSesion() },
-                    modifier = Modifier.padding(
-                        horizontal = 12.dp,
-                        vertical = 3.dp
-                    )
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        alCerrarSesion()
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp)
                 )
             }
         }
@@ -169,6 +170,7 @@ fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(espacio)
+                    .consumeWindowInsets(espacio)
             ) {
 
                 when (pantalla) {
@@ -177,17 +179,15 @@ fun AdminScreen(alCerrarSesion: () -> Unit = {}) {
                         abrirPantalla = { pantalla = it }
                     )
 
-                    Asistente -> AsistenteAdminScreen()
+                    Asistente -> AsistenteIAScreen(usuario)
 
-                    Evaluacion -> EvaluacionScreen()
+                    Evaluacion -> EvaluacionScreen(usuario)
 
-                    NuevoAdmin -> NuevoAdministradorScreen()
+                    NuevoAdmin -> NuevoAdministradorScreen(usuario)
 
-                    Historial -> HistorialReportesScreen()
+                    Historial -> HistorialReportesScreen(usuario)
 
-                    HistorialGraficos -> HistorialGraficosScreen()
-
-                   // AdminRoutes.VENTAS -> ReportesVentasScreen()
+                    // AdminRoutes.VENTAS -> ReportesVentasScreen()
                 }
             }
         }
@@ -234,7 +234,7 @@ private fun PanelControl(
             }
 
             TarjetaAdmin(
-                titulo = "Historial de reportes",
+                titulo = "Reportes de supervisores",
                 icono = Icons.Default.Description,
                 colorIcono = Color(0xFFE7A12B),
                 modifier = Modifier.weight(1f)
@@ -253,7 +253,7 @@ private fun PanelControl(
         ) {
 
             TarjetaAdmin(
-                titulo = "Evaluaciones",
+                titulo = "Mis supervisores",
                 icono = Icons.Default.Assessment,
                 colorIcono = Color(0xFF24A779),
                 modifier = Modifier.weight(1f)
@@ -262,33 +262,13 @@ private fun PanelControl(
             }
 
             TarjetaAdmin(
-                titulo = "Nuevo gerente",
+                titulo = "Nuevo supervisor",
                 icono = Icons.Default.PersonAdd,
                 colorIcono = Color(0xFFA16AF3),
                 modifier = Modifier.weight(1f)
             ) {
                 abrirPantalla(NuevoAdmin)
             }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // TERCERA FILA
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            TarjetaAdmin(
-                titulo = "Historial de gráficos",
-                icono = Icons.Default.Assessment,
-                colorIcono = Color(0xFF27AE60),
-                modifier = Modifier.weight(1f)
-            ) {
-                abrirPantalla(HistorialGraficos)
-            }
-
-            Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -339,32 +319,5 @@ private fun TarjetaAdmin(
                 color = Texto
             )
         }
-    }
-}
-
-// PANTALLA TEMPORAL DEL ASISTENTE
-
-@Composable
-private fun AsistenteAdminScreen() {
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-    ) {
-
-        Text(
-            text = "Asistente",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            color = Texto
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = "Aquí podrás integrar las funciones de tu asistente.",
-            color = Gris
-        )
     }
 }
