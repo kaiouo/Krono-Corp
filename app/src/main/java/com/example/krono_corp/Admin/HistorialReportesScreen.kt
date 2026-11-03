@@ -1,129 +1,242 @@
-
 package com.example.krono_corp.Admin
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.data.NegocioRepository
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.CuentaSupervisor
+import com.example.krono_corp.data.GerenteRepository
 import com.example.krono_corp.data.ReporteRemoto
+import com.example.krono_corp.data.ReportesRepository
+import com.example.krono_corp.negocio.MiniBarChart
+import kotlinx.coroutines.launch
 
-// Vista del Gerente General: todos los reportes que los dueños/supervisores han generado
-// con su Asistente, de cualquier negocio (coleccion "reportes", scope = "negocio").
+/**
+ * Reportes y gráficos que generan los supervisores del gerente (tabla "reportes").
+ * El gerente puede buscarlos, filtrarlos por estado o supervisor y marcarlos como Revisado.
+ */
 @Composable
-fun HistorialReportesScreen() {
-    var busqueda by remember { mutableStateOf("") }
+fun HistorialReportesScreen(usuario: AppUser) {
     var cargando by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var supervisores by remember { mutableStateOf<List<CuentaSupervisor>>(emptyList()) }
     var reportes by remember { mutableStateOf<List<ReporteRemoto>>(emptyList()) }
-    var reporteSeleccionado by remember { mutableStateOf<ReporteRemoto?>(null) }
+    var busqueda by remember { mutableStateOf("") }
+    var filtroEstado by remember { mutableStateOf("Todos") }
+    var filtroSupervisor by remember { mutableStateOf<String?>(null) } // null = todos
+    var seleccionado by remember { mutableStateOf<ReporteRemoto?>(null) }
+    var recarga by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(recarga) {
         cargando = true
-        NegocioRepository.listarReportes(scope = "negocio")
-            .onSuccess { reportes = it; error = "" }
-            .onFailure { e -> error = e.message ?: "No se pudo cargar el historial de reportes." }
+        error = null
+        GerenteRepository.supervisoresDe(usuario.id)
+            .onSuccess { supervisores = it }
+            .onFailure { error = it.message }
+        ReportesRepository.listar()
+            .onSuccess { reportes = it }
+            .onFailure { if (error == null) error = it.message }
         cargando = false
     }
 
-    val filtrados = reportes.filter { it.titulo.contains(busqueda, ignoreCase = true) }
+    val ids = supervisores.map { it.id }.toSet()
+    val misReportes = reportes.filter { it.supervisorId in ids }
+    val filtrados = misReportes.filter { r ->
+        (busqueda.isBlank() ||
+                r.titulo.contains(busqueda, ignoreCase = true) ||
+                r.supervisorNombre.contains(busqueda, ignoreCase = true)) &&
+                (filtroEstado == "Todos" || r.estado == filtroEstado) &&
+                (filtroSupervisor == null || r.supervisorId == filtroSupervisor)
+    }
+    val pendientes = misReportes.count { it.estado == ReportesRepository.ESTADO_PENDIENTE }
 
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        Text(
-            text = "Historial de reportes",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(Modifier.height(4.dp))
-
-        Text(
-            "Reportes generados por los administradores en todos los negocios",
-            fontSize = 13.sp,
-            color = Color.Gray
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedTextField(
-            value = busqueda,
-            onValueChange = { busqueda = it },
-            label = { Text("Buscar por título") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        Text(
-            text = "${filtrados.size} reportes encontrados",
-            color = Color.Gray
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        when {
-            cargando -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            error.isNotBlank() -> Text(error, color = Color(0xFFEB5757))
-            filtrados.isEmpty() -> Text("Todavía no hay reportes generados.", color = Color.Gray)
-            else -> LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(filtrados, key = { it.id }) { reporte ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(
-                                text = reporte.titulo,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Fecha: ${reporte.fecha}",
-                                color = Color.Gray
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            TextButton(onClick = { reporteSeleccionado = reporte }) {
-                                Text("Ver detalles")
-                            }
-                        }
+                Text(
+                    "Reportes de supervisores",
+                    fontSize = 24.sp,
+                    lineHeight = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminTexto,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { recarga++ }, enabled = !cargando) { Text("Actualizar") }
+            }
+        }
+
+        if (cargando) item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+        error?.let { mensaje -> item { Text(mensaje, color = AdminRojo, fontSize = 13.sp) } }
+
+        item {
+            OutlinedTextField(
+                value = busqueda,
+                onValueChange = { busqueda = it },
+                label = { Text("Buscar por título o supervisor") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        item {
+            Text("Estado", fontSize = 12.sp, color = AdminGris)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(listOf("Todos", ReportesRepository.ESTADO_PENDIENTE, ReportesRepository.ESTADO_REVISADO)) { estado ->
+                    FilterChip(
+                        selected = filtroEstado == estado,
+                        onClick = { filtroEstado = estado },
+                        label = { Text(estado) }
+                    )
+                }
+            }
+        }
+
+        if (supervisores.isNotEmpty()) {
+            item {
+                Text("Supervisor", fontSize = 12.sp, color = AdminGris)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    item {
+                        FilterChip(
+                            selected = filtroSupervisor == null,
+                            onClick = { filtroSupervisor = null },
+                            label = { Text("Todos") }
+                        )
+                    }
+                    items(supervisores, key = { it.id }) { s ->
+                        FilterChip(
+                            selected = filtroSupervisor == s.id,
+                            onClick = { filtroSupervisor = s.id },
+                            label = { Text(s.alias) }
+                        )
                     }
                 }
             }
         }
+
+        item {
+            Text(
+                "${filtrados.size} encontrados · $pendientes pendientes de revisar",
+                fontSize = 12.sp,
+                color = AdminGris
+            )
+        }
+
+        if (!cargando && error == null && supervisores.isEmpty()) {
+            item { TextoVacio("Aún no tienes supervisores asignados, así que no hay reportes que mostrar.") }
+        } else if (!cargando && error == null && misReportes.isEmpty()) {
+            item { TextoVacio("Tus supervisores todavía no han generado reportes ni gráficos.") }
+        }
+
+        items(filtrados, key = { it.id }) { r ->
+            val sucursal = supervisores.firstOrNull { it.id == r.supervisorId }?.sucursal.orEmpty()
+            TarjetaBlanca {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (r.tipo == ReportesRepository.TIPO_GRAFICO) "GRÁFICO" else "REPORTE",
+                        fontSize = 11.sp,
+                        color = AdminGris
+                    )
+                    Etiqueta(
+                        r.estado,
+                        if (r.estado == ReportesRepository.ESTADO_REVISADO) AdminVerde else AdminNaranja
+                    )
+                }
+                Text(r.titulo, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AdminTexto)
+                Text(
+                    "Supervisor: ${r.supervisorNombre}" + if (sucursal.isNotBlank()) " · $sucursal" else "",
+                    fontSize = 13.sp,
+                    color = AdminGris
+                )
+                Text("Generado: ${r.fecha}", fontSize = 12.sp, color = AdminGris)
+                TextButton(onClick = { seleccionado = r }) { Text("Ver detalles") }
+            }
+        }
     }
 
-    reporteSeleccionado?.let { reporte ->
+    seleccionado?.let { r ->
         AlertDialog(
-            onDismissRequest = { reporteSeleccionado = null },
-            title = { Text(reporte.titulo) },
+            onDismissRequest = { seleccionado = null },
+            title = { Text(r.titulo, fontWeight = FontWeight.Bold) },
             text = {
-                Column {
-                    Text("Fecha: ${reporte.fecha}")
-                    Spacer(Modifier.height(8.dp))
-                    Text(reporte.contenido)
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Supervisor: ${r.supervisorNombre}", fontSize = 13.sp)
+                    Text("Generado: ${r.fecha}", fontSize = 13.sp, color = AdminGris)
+                    Text("Estado: ${r.estado}", fontSize = 13.sp, color = AdminGris)
+                    Spacer(Modifier.height(10.dp))
+                    if (r.tipo == ReportesRepository.TIPO_GRAFICO) {
+                        val datos = ReportesRepository.decodificarDatos(r.contenido)
+                        MiniBarChart(datos = datos, altura = 110)
+                        Spacer(Modifier.height(10.dp))
+                        datos.forEach { (etiqueta, valor) -> Text("• $etiqueta: $valor", fontSize = 13.sp) }
+                    } else {
+                        Text(r.contenido, fontSize = 13.sp)
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { reporteSeleccionado = null }) {
-                    Text("Cerrar")
+                TextButton(onClick = {
+                    val nuevo = if (r.estado == ReportesRepository.ESTADO_REVISADO)
+                        ReportesRepository.ESTADO_PENDIENTE else ReportesRepository.ESTADO_REVISADO
+                    seleccionado = null
+                    scope.launch {
+                        ReportesRepository.cambiarEstado(r.id, nuevo)
+                            .onSuccess {
+                                reportes = reportes.map { x -> if (x.id == r.id) x.copy(estado = nuevo) else x }
+                            }
+                            .onFailure { error = it.message }
+                    }
+                }) {
+                    Text(
+                        if (r.estado == ReportesRepository.ESTADO_REVISADO) "Marcar como pendiente"
+                        else "Marcar como revisado"
+                    )
                 }
-            }
+            },
+            dismissButton = { TextButton(onClick = { seleccionado = null }) { Text("Cerrar") } }
         )
     }
 }
