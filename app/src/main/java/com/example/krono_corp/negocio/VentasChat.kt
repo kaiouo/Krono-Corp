@@ -1,0 +1,654 @@
+package com.example.krono_corp.negocio
+
+import android.content.Context
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.NuevaVenta
+import com.example.krono_corp.data.PreguntaVenta
+import com.example.krono_corp.data.VentaRegistrada
+import com.example.krono_corp.data.VentasRepository
+import com.example.krono_corp.data.fechaHora
+import com.example.krono_corp.ia.GestorIA
+import com.example.krono_corp.ia.GroqService
+import com.example.krono_corp.reportes.VentasExcel
+import com.example.krono_corp.reportes.VentasPdf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.Normalizer
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Locale
+
+// ==============================================================
+// Cerebro de ventas del chat (SUPERVISOR y DUENO):
+//   - registrar una venta con preguntas guiadas
+//   - consultar ventas (la app calcula las cifras, Groq las redacta)
+//   - exportar a Excel o PDF (y avisar para guardarlo en el historial de reportes)
+//   - eliminar una venta
+// ==============================================================
+
+class RespuestaChat(val texto: String, val archivos: List<File> = emptyList())
+
+class ReporteVentas(
+    val titulo: String,
+    val contenido: String,
+    val datosGrafico: List<Pair<String, Int>>
+)
+
+private val METODOS_PAGO = listOf("Efectivo", "Tarjeta", "Transferencia", "Otro")
+private val formatoVista = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+private val LOCALE_ES = Locale.forLanguageTag("es-SV")
+
+private enum class Formato { EXCEL, PDF }
+
+private class FlujoVenta(val pasos: List<PreguntaVenta>) {
+    var indice = 0
+    var confirmando = false
+    var producto = ""
+    var cantidad = 0
+    var precio = 0.0
+    var descuento = 0.0
+    var descuentoTexto = ""
+    var sucursal = ""
+    var metodoPago = ""
+    var nota = ""
+    val extras = LinkedHashMap<String, String>()
+
+    val subtotal: Double get() = cantidad * precio
+    val total: Double get() = (subtotal - descuento).coerceAtLeast(0.0)
+}
+
+private data class Filtros(
+    val desde: LocalDateTime?,
+    val hasta: LocalDateTime?,
+    val periodo: String,
+    val producto: String?,
+    val sucursal: String?
+) {
+    fun descripcion(): String = buildString {
+        append(periodo)
+        if (producto != null) append(" · producto $producto")
+        if (sucursal != null) append(" · $sucursal")
+    }
+}
+
+private sealed interface Estado {
+    class Registrando(val flujo: FlujoVenta) : Estado
+    class ElegirFormato(val filtros: Filtros) : Estado
+    class ElegirEliminar(val opciones: List<VentaRegistrada>) : Estado
+    class ConfirmarEliminar(val venta: VentaRegistrada) : Estado
+}
+
+class VentasChat(
+    private val usuario: AppUser,
+    private val negocio: NegocioData,
+    context: Context,
+    /** Se llama cada vez que se exporta un PDF/Excel, para guardarlo en el historial de reportes. */
+    private val alExportar: (titulo: String, contenido: String, archivos: List<File>) -> Unit =
+        { _, _, _ -> }
+) {
+    private val appContext = context.applicationContext
+    private val groq = GroqService()      // redacta las respuestas de consulta (sin memoria)
+    private val gestor = GestorIA()       // conversación libre con memoria
+    private var estado: Estado? = null
+
+    // ------------------------------------------------------------------
+    // Punto de entrada. Devuelve null si el mensaje no tiene que ver con ventas.
+    // ------------------------------------------------------------------
+    suspend fun procesar(entrada: String): RespuestaChat? {
+        val texto = entrada.trim()
+        val p = normalizar(texto)
+
+        // 1) Si hay un proceso en curso, el mensaje es la respuesta a ese proceso
+        estado?.let { actual ->
+            if (esCancelar(p)) {
+                estado = null
+                return RespuestaChat("Listo, lo cancelé. ¿En qué más te ayudo?")
+            }
+            return when (actual) {
+                is Estado.Registrando -> responderPaso(actual.flujo, texto)
+                is Estado.ElegirFormato -> elegirFormato(actual, p)
+                is Estado.ElegirEliminar -> elegirEliminar(actual, p)
+                is Estado.ConfirmarEliminar -> confirmarEliminar(actual, p)
+            }
+        }
+
+        // 2) Detectar la intención
+        return when {
+            esEliminar(p) -> iniciarEliminar(p)
+            esExportar(p) -> exportar(p)
+            esRegistrar(p) -> iniciarRegistro()
+            esConsulta(p) -> consultar(texto, p)
+            else -> null
+        }
+    }
+
+    /** Conversación libre con Groq (para lo que no es de ventas). */
+    suspend fun preguntarIA(pregunta: String): String =
+        gestor.procesarPregunta(pregunta).getOrElse {
+            "Todavía no puedo responder eso (${it.message}). Prueba con una de las opciones de abajo."
+        }
+
+    /** Reporte del mes actual con las ventas reales (para el botón «Generar reporte» y «Generar gráfico»). */
+    suspend fun reporteDelMes(): Result<ReporteVentas?> {
+        val todas = VentasRepository.listar(usuario.id).getOrElse { return Result.failure(it) }
+        val hoy = LocalDate.now()
+        val inicio = hoy.withDayOfMonth(1).atStartOfDay()
+        val ventas = todas.filter { it.fechaHora >= inicio }
+        if (ventas.isEmpty()) return Result.success(null)
+
+        val mes = hoy.month.getDisplayName(TextStyle.FULL, LOCALE_ES)
+        val porProducto = ventas.groupBy { it.producto }
+            .map { (n, l) -> Triple(n, l.sumOf { it.cantidad }, l.sumOf { it.total }) }
+            .sortedByDescending { it.second }
+
+        val contenido = buildString {
+            appendLine("Reporte de ventas de $mes ${hoy.year}:")
+            porProducto.forEach { appendLine("• ${it.first}: ${it.second} unidades — ${dinero(it.third)}") }
+            append("Total vendido: ${dinero(ventas.sumOf { it.total })} en ${ventas.size} venta(s)")
+        }
+        return Result.success(
+            ReporteVentas(
+                titulo = "Reporte de ventas - $mes ${hoy.year}",
+                contenido = contenido,
+                datosGrafico = porProducto.take(6).map { it.first to it.second }
+            )
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Detección de intenciones
+    // ------------------------------------------------------------------
+    private fun esCancelar(p: String) =
+        p in setOf("cancelar", "cancela", "cancelo", "salir", "olvidalo", "olvida", "no quiero") ||
+                p.startsWith("cancel")
+
+    private fun esSi(p: String) =
+        p in setOf("si", "s", "sii", "claro", "ok", "okay", "confirmo", "confirmar", "guardar", "dale", "correcto", "yes") ||
+                p.startsWith("si ")
+
+    private fun esNo(p: String) =
+        p in setOf("no", "n", "nop", "ninguno", "ninguna", "omitir", "omito", "sin descuento", "-", "nada")
+
+    private fun esRegistrar(p: String): Boolean {
+        val verbo = listOf(
+            "registrar", "registra", "almacenar", "almacena", "guardar", "guarda", "anotar", "anota",
+            "agregar", "agrega", "ingresar", "ingresa", "nueva venta", "crear venta", "anadir"
+        ).any { it in p }
+        return ("venta" in p && verbo) || p.startsWith("vendi ") || "quiero vender" in p
+    }
+
+    private fun esEliminar(p: String) =
+        "venta" in p && listOf("elimin", "borr", "anul", "quitar", "quita ").any { it in p }
+
+    private fun esExportar(p: String): Boolean {
+        val formato = "excel" in p || "xlsx" in p || "pdf" in p || "hoja de calculo" in p
+        val verbo = "export" in p || "descarg" in p || "archivo" in p
+        return (formato && ("venta" in p || "reporte" in p || verbo)) || (verbo && "venta" in p)
+    }
+
+    private fun esConsulta(p: String): Boolean {
+        if ("stock" in p || "inventario" in p) return false
+        return "venta" in p || "vendi" in p || "vendid" in p || "ingreso" in p || "recaud" in p
+    }
+
+    // ------------------------------------------------------------------
+    // Registrar venta (conversación guiada)
+    // ------------------------------------------------------------------
+    private fun iniciarRegistro(): RespuestaChat {
+        val pasos = PreguntaVenta.normalizar(negocio.preguntasVenta).filter { it.activa || it.obligatoria }
+        val flujo = FlujoVenta(pasos)
+        estado = Estado.Registrando(flujo)
+        val encabezado = "Perfecto, vamos a registrar una venta. (Escribe «cancelar» en cualquier momento para salir.)\n\n"
+        val primera = avanzar(flujo)
+        return RespuestaChat(encabezado + primera.texto)
+    }
+
+    private fun opcionesSucursal(): List<String> =
+        negocio.sucursales.filter { it.activa }.map { it.nombre }
+
+    private fun preguntaActual(f: FlujoVenta): String {
+        val paso = f.pasos[f.indice]
+        val sb = StringBuilder()
+        sb.append("Pregunta ${f.indice + 1} de ${f.pasos.size}\n").append(paso.texto)
+        when (paso.id) {
+            PreguntaVenta.SUCURSAL -> {
+                sb.append("\n")
+                opcionesSucursal().forEachIndexed { i, s -> sb.append("\n${i + 1}. $s") }
+                sb.append("\n\nResponde con el número o el nombre.")
+            }
+            PreguntaVenta.METODO_PAGO -> {
+                sb.append("\n")
+                METODOS_PAGO.forEachIndexed { i, s -> sb.append("\n${i + 1}. $s") }
+                sb.append("\n\nResponde con el número o escribe otro método.")
+            }
+            else -> if (paso.personalizada) sb.append("\n(Escribe «no» para omitir.)")
+        }
+        return sb.toString()
+    }
+
+    private fun avanzar(f: FlujoVenta): RespuestaChat {
+        // Si no hay sucursales activas, esa pregunta se omite
+        while (f.indice < f.pasos.size &&
+            f.pasos[f.indice].id == PreguntaVenta.SUCURSAL &&
+            opcionesSucursal().isEmpty()
+        ) f.indice++
+
+        if (f.indice < f.pasos.size) return RespuestaChat(preguntaActual(f))
+        f.confirmando = true
+        return RespuestaChat(resumenVenta(f))
+    }
+
+    private suspend fun responderPaso(f: FlujoVenta, entrada: String): RespuestaChat {
+        if (f.confirmando) return confirmarRegistro(f, normalizar(entrada))
+
+        val paso = f.pasos[f.indice]
+        val e = entrada.trim()
+        val omitir = esNo(normalizar(e))
+
+        when (paso.id) {
+            PreguntaVenta.PRODUCTO -> {
+                if (e.length < 2) return RespuestaChat("Escribe el nombre del producto, por ejemplo «Camisa».")
+                f.producto = e.replaceFirstChar { it.uppercase() }
+            }
+            PreguntaVenta.CANTIDAD -> {
+                val n = Regex("\\d+").find(e)?.value?.toIntOrNull()
+                if (n == null || n <= 0 || n > 100000) {
+                    return RespuestaChat("Indica una cantidad válida (un número entero mayor que 0).")
+                }
+                f.cantidad = n
+            }
+            PreguntaVenta.PRECIO -> {
+                val v = parseNumero(e)
+                if (v == null || v <= 0.0) {
+                    return RespuestaChat("Indica un precio válido en dólares, por ejemplo 15 o 15.50.")
+                }
+                f.precio = redondear(v)
+            }
+            PreguntaVenta.DESCUENTO -> {
+                if (omitir) {
+                    f.descuento = 0.0
+                    f.descuentoTexto = ""
+                } else {
+                    val d = parseDescuento(e, f.subtotal)
+                        ?: return RespuestaChat(
+                            "No entendí el descuento. Escribe un porcentaje (ej. 10%) o un monto en dólares " +
+                                    "(ej. 5), o «no». No puede superar el subtotal de ${dinero(f.subtotal)}."
+                        )
+                    f.descuento = d.first
+                    f.descuentoTexto = d.second
+                }
+            }
+            PreguntaVenta.SUCURSAL -> {
+                f.sucursal = if (omitir) "" else resolverOpcion(e, opcionesSucursal())
+                    ?: return RespuestaChat("No reconocí la sucursal.\n\n" + preguntaActual(f))
+            }
+            PreguntaVenta.METODO_PAGO -> {
+                f.metodoPago = if (omitir) "" else resolverOpcion(e, METODOS_PAGO)
+                    ?: e.replaceFirstChar { it.uppercase() }
+            }
+            PreguntaVenta.NOTA -> f.nota = if (omitir) "" else e
+            else -> f.extras[paso.texto] = if (omitir) "" else e
+        }
+
+        f.indice++
+        return avanzar(f)
+    }
+
+    private fun resumenVenta(f: FlujoVenta): String = buildString {
+        appendLine("Este es el resumen de la venta:\n")
+        appendLine("• Producto: ${f.producto}")
+        appendLine("• Cantidad: ${f.cantidad}")
+        appendLine("• Precio unitario: ${dinero(f.precio)}")
+        if (f.descuento > 0) {
+            val extra = if (f.descuentoTexto.isNotBlank()) " (${f.descuentoTexto})" else ""
+            appendLine("• Descuento: ${dinero(f.descuento)}$extra")
+        }
+        appendLine("• Total: ${dinero(f.total)}")
+        if (f.sucursal.isNotBlank()) appendLine("• Sucursal: ${f.sucursal}")
+        if (f.metodoPago.isNotBlank()) appendLine("• Pago: ${f.metodoPago}")
+        if (f.nota.isNotBlank()) appendLine("• Nota: ${f.nota}")
+        f.extras.forEach { (pregunta, respuesta) ->
+            if (respuesta.isNotBlank()) appendLine("• ${pregunta.trim('¿', '?', ' ')}: $respuesta")
+        }
+        append("\n¿Confirmas? Responde «sí» para guardarla o «no» para descartarla.")
+    }
+
+    private suspend fun confirmarRegistro(f: FlujoVenta, p: String): RespuestaChat {
+        if (esNo(p)) {
+            estado = null
+            return RespuestaChat("Venta descartada. No se guardó nada.")
+        }
+        if (!esSi(p)) return RespuestaChat("Responde «sí» para guardar la venta o «no» para descartarla.")
+
+        val nueva = NuevaVenta(
+            producto = f.producto,
+            cantidad = f.cantidad,
+            precioUnitario = f.precio,
+            descuento = f.descuento,
+            total = redondear(f.total),
+            sucursal = f.sucursal,
+            metodoPago = f.metodoPago,
+            nota = f.nota,
+            extras = f.extras.toMap()
+        )
+        return VentasRepository.guardar(usuario, nueva).fold(
+            onSuccess = {
+                estado = null
+                RespuestaChat(
+                    "✅ Venta registrada: ${it.cantidad} × ${it.producto} — total ${dinero(it.total)}.\n\n" +
+                            "Puedes pedirme «ventas de hoy», «exporta mis ventas del mes en Excel» o «registrar otra venta»."
+                )
+            },
+            onFailure = {
+                RespuestaChat(
+                    "No pude guardar la venta: ${it.message}\n\n" +
+                            "Responde «sí» para reintentar o «no» para descartarla."
+                )
+            }
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Consultar
+    // ------------------------------------------------------------------
+    private suspend fun consultar(pregunta: String, p: String): RespuestaChat {
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        if (todas.isEmpty()) {
+            return RespuestaChat("Aún no tienes ventas registradas. Escribe «registrar venta» para empezar.")
+        }
+
+        val filtros = filtrosDe(p, todas)
+        val ventas = aplicar(filtros, todas)
+        if (ventas.isEmpty()) {
+            return RespuestaChat(
+                "No encontré ventas ${filtros.descripcion()}. " +
+                        "Prueba con «de este mes», «de la semana» o «todas»."
+            )
+        }
+
+        val datos = construirDatos(ventas, filtros, p)
+        val redaccion = redactar(pregunta, datos)
+        val pista = "\n\n💡 Puedes pedirme: «exporta las ventas ${filtros.periodo} en Excel o PDF»."
+        return RespuestaChat(
+            if (redaccion != null) "$redaccion\n\n— Detalle —\n$datos$pista" else "$datos$pista"
+        )
+    }
+
+    /** Groq solo redacta; las cifras las calcula la app y se le entregan ya hechas. */
+    private suspend fun redactar(pregunta: String, datos: String): String? {
+        val prompt = "Datos calculados por la app (no inventes ni cambies cifras):\n$datos\n\n" +
+                "Pregunta del usuario: $pregunta\n\n" +
+                "Responde en español, claro y breve (máximo 4 frases), usando solo esos datos."
+        return groq.enviar(emptyList(), prompt).getOrNull()
+            ?.replace("**", "")?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun construirDatos(ventas: List<VentaRegistrada>, f: Filtros, p: String): String = buildString {
+        val total = ventas.sumOf { it.total }
+        val descuentos = ventas.sumOf { it.descuento }
+        appendLine("Periodo: ${f.descripcion()}")
+        appendLine("Ventas registradas: ${ventas.size}")
+        appendLine("Unidades vendidas: ${ventas.sumOf { it.cantidad }}")
+        appendLine("Total vendido: ${dinero(total)}")
+        if (descuentos > 0) appendLine("Descuentos aplicados: ${dinero(descuentos)}")
+        appendLine("Venta promedio: ${dinero(total / ventas.size)}")
+
+        val porProducto = ventas.groupBy { it.producto }
+            .map { (n, l) -> Triple(n, l.sumOf { it.cantidad }, l.sumOf { it.total }) }
+            .sortedByDescending { it.second }
+        appendLine("Productos más vendidos (unidades · total):")
+        porProducto.take(5).forEach { appendLine("- ${it.first}: ${it.second} · ${dinero(it.third)}") }
+
+        val porSucursal = ventas.filter { it.sucursal.isNotBlank() }.groupBy { it.sucursal }
+        if (porSucursal.size > 1) {
+            appendLine("Por sucursal:")
+            porSucursal.forEach { (s, l) -> appendLine("- $s: ${dinero(l.sumOf { it.total })}") }
+        }
+
+        val porPago = ventas.filter { it.metodoPago.isNotBlank() }.groupBy { it.metodoPago }
+        if (porPago.size > 1) {
+            appendLine("Por método de pago:")
+            porPago.forEach { (m, l) -> appendLine("- $m: ${dinero(l.sumOf { it.total })}") }
+        }
+
+        if (Regex("\\bmeses\\b").containsMatchIn(p)) {
+            appendLine("Por mes (de mayor a menor):")
+            ventas.groupBy { it.fechaHora.year to it.fechaHora.monthValue }
+                .map { (ym, l) ->
+                    val nombre = java.time.Month.of(ym.second).getDisplayName(TextStyle.FULL, LOCALE_ES)
+                    Triple("$nombre ${ym.first}", l.sumOf { it.total }, l.size)
+                }
+                .sortedByDescending { it.second }
+                .forEach { appendLine("- ${it.first}: ${dinero(it.second)} (${it.third} ventas)") }
+        }
+
+        if ("ultima" in p || "reciente" in p) {
+            appendLine("Últimas ventas:")
+            ventas.take(5).forEach { appendLine("- ${resumenLinea(it)}") }
+        }
+    }.trim()
+
+    // ------------------------------------------------------------------
+    // Exportar
+    // ------------------------------------------------------------------
+    private suspend fun exportar(p: String): RespuestaChat {
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        if (todas.isEmpty()) {
+            return RespuestaChat("Aún no tienes ventas registradas para exportar. Escribe «registrar venta» para empezar.")
+        }
+        val filtros = filtrosDe(p, todas)
+        val formatos = formatosDe(p)
+        if (formatos.isEmpty()) {
+            estado = Estado.ElegirFormato(filtros)
+            return RespuestaChat(
+                "¿En qué formato quieres las ventas ${filtros.descripcion()}? " +
+                        "Responde «Excel», «PDF» o «ambos»."
+            )
+        }
+        return generarArchivos(filtros, formatos, todas)
+    }
+
+    private suspend fun elegirFormato(e: Estado.ElegirFormato, p: String): RespuestaChat {
+        val formatos = formatosDe(p)
+        if (formatos.isEmpty()) return RespuestaChat("Responde «Excel», «PDF» o «ambos» (o «cancelar»).")
+        estado = null
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        return generarArchivos(e.filtros, formatos, todas)
+    }
+
+    private fun formatosDe(p: String): Set<Formato> = buildSet {
+        if ("excel" in p || "xlsx" in p || "hoja de calculo" in p) add(Formato.EXCEL)
+        if ("pdf" in p) add(Formato.PDF)
+        if ("ambos" in p || "los dos" in p) {
+            add(Formato.EXCEL)
+            add(Formato.PDF)
+        }
+    }
+
+    private suspend fun generarArchivos(
+        f: Filtros,
+        formatos: Set<Formato>,
+        todas: List<VentaRegistrada>
+    ): RespuestaChat {
+        val ventas = aplicar(f, todas)
+        if (ventas.isEmpty()) return RespuestaChat("No encontré ventas ${f.descripcion()} para exportar.")
+        return try {
+            val archivos = withContext(Dispatchers.IO) {
+                buildList {
+                    if (Formato.EXCEL in formatos) add(VentasExcel.generar(appContext, ventas, f.descripcion()))
+                    if (Formato.PDF in formatos) {
+                        add(VentasPdf.generar(appContext, ventas, f.descripcion(), usuario.alias, negocio.nombreNegocio))
+                    }
+                }
+            }
+            val resumen = "Exporté ${ventas.size} venta(s) ${f.descripcion()}. " +
+                    "Total: ${dinero(ventas.sumOf { it.total })}."
+
+            // Avisa para que el PDF/Excel quede en el historial de reportes
+            alExportar(
+                "Ventas ${f.descripcion()} (${archivos.joinToString(" y ") { it.extension.uppercase() }})",
+                resumen,
+                archivos
+            )
+
+            RespuestaChat("Listo ✅ $resumen Lo guardé en el historial de reportes.", archivos)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            RespuestaChat("No pude generar el archivo: ${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Eliminar
+    // ------------------------------------------------------------------
+    private suspend fun iniciarEliminar(p: String): RespuestaChat {
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        if (todas.isEmpty()) return RespuestaChat("No tienes ventas registradas.")
+
+        val recientes = todas.take(5) // ya vienen de la más reciente a la más antigua
+        if ("ultima" in p) {
+            estado = Estado.ConfirmarEliminar(recientes.first())
+            return RespuestaChat(
+                "¿Seguro que quieres eliminar la última venta?\n${resumenLinea(recientes.first())}\n\n" +
+                        "Responde «sí» o «no»."
+            )
+        }
+        estado = Estado.ElegirEliminar(recientes)
+        return RespuestaChat(
+            "Estas son tus últimas ventas. Responde con el número de la que quieres eliminar:\n\n" +
+                    recientes.mapIndexed { i, v -> "${i + 1}. ${resumenLinea(v)}" }.joinToString("\n")
+        )
+    }
+
+    private fun elegirEliminar(e: Estado.ElegirEliminar, p: String): RespuestaChat {
+        val n = Regex("\\d+").find(p)?.value?.toIntOrNull()
+        val venta = n?.let { e.opciones.getOrNull(it - 1) }
+            ?: return RespuestaChat("Responde con un número de la lista (1 a ${e.opciones.size}) o «cancelar».")
+        estado = Estado.ConfirmarEliminar(venta)
+        return RespuestaChat("¿Eliminar esta venta?\n${resumenLinea(venta)}\n\nResponde «sí» o «no».")
+    }
+
+    private suspend fun confirmarEliminar(e: Estado.ConfirmarEliminar, p: String): RespuestaChat {
+        if (esNo(p)) {
+            estado = null
+            return RespuestaChat("Listo, no eliminé nada.")
+        }
+        if (!esSi(p)) return RespuestaChat("Responde «sí» para eliminarla o «no» para conservarla.")
+        return VentasRepository.eliminar(e.venta.id).fold(
+            onSuccess = {
+                estado = null
+                RespuestaChat("Venta eliminada.")
+            },
+            onFailure = { RespuestaChat("No pude eliminarla: ${it.message}") }
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Filtros (periodo, producto, sucursal) tomados del texto del usuario
+    // ------------------------------------------------------------------
+    private fun palabra(p: String, w: String) = Regex("\\b$w\\b").containsMatchIn(p)
+
+    private fun filtrosDe(p: String, ventas: List<VentaRegistrada>): Filtros {
+        val hoy = LocalDate.now()
+        val periodo: Triple<LocalDateTime?, LocalDateTime?, String> = when {
+            palabra(p, "ayer") ->
+                Triple(hoy.minusDays(1).atStartOfDay(), hoy.atStartOfDay(), "de ayer")
+            palabra(p, "hoy") ->
+                Triple(hoy.atStartOfDay(), hoy.plusDays(1).atStartOfDay(), "de hoy")
+            "semana" in p ->
+                Triple(hoy.with(DayOfWeek.MONDAY).atStartOfDay(), null, "de esta semana")
+            "mes pasado" in p -> {
+                val inicioActual = hoy.withDayOfMonth(1)
+                Triple(inicioActual.minusMonths(1).atStartOfDay(), inicioActual.atStartOfDay(), "del mes pasado")
+            }
+            palabra(p, "todas") || palabra(p, "todo") || "historial" in p || "siempre" in p || palabra(p, "meses") ->
+                Triple(null, null, "de todo el historial")
+            palabra(p, "ano") ->
+                Triple(hoy.withDayOfYear(1).atStartOfDay(), null, "de este año")
+            else ->
+                Triple(hoy.withDayOfMonth(1).atStartOfDay(), null, "de este mes")
+        }
+
+        val producto = ventas.map { it.producto }.distinct()
+            .filter { it.isNotBlank() }
+            .sortedByDescending { it.length }
+            .firstOrNull { p.contains(normalizar(it)) }
+
+        val sucursales = (negocio.sucursales.map { it.nombre } + ventas.map { it.sucursal })
+            .distinct().filter { it.isNotBlank() }
+        val sucursal = sucursales.firstOrNull { coincideNombre(p, it) }
+
+        return Filtros(periodo.first, periodo.second, periodo.third, producto, sucursal)
+    }
+
+    private fun aplicar(f: Filtros, ventas: List<VentaRegistrada>): List<VentaRegistrada> =
+        ventas.filter { v ->
+            val fecha = v.fechaHora
+            (f.desde == null || fecha >= f.desde) &&
+                    (f.hasta == null || fecha < f.hasta) &&
+                    (f.producto == null || v.producto.equals(f.producto, ignoreCase = true)) &&
+                    (f.sucursal == null || v.sucursal.equals(f.sucursal, ignoreCase = true))
+        }
+
+    // ------------------------------------------------------------------
+    // Utilidades
+    // ------------------------------------------------------------------
+    private fun normalizar(t: String): String =
+        Normalizer.normalize(t, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "").lowercase().trim()
+
+    /** "Sucursal 1 - Mejicanos" coincide si el texto contiene el nombre completo o la parte tras el guion. */
+    private fun coincideNombre(p: String, nombre: String): Boolean {
+        val completo = normalizar(nombre)
+        val corto = normalizar(nombre.substringAfter("-"))
+        return p.contains(completo) || (corto.length >= 3 && p.contains(corto))
+    }
+
+    private fun resolverOpcion(entrada: String, opciones: List<String>): String? {
+        val p = normalizar(entrada)
+        p.toIntOrNull()?.let { n -> return opciones.getOrNull(n - 1) }
+        return opciones.firstOrNull { normalizar(it) == p }
+            ?: opciones.firstOrNull { p.length >= 3 && coincideNombre(p, it) }
+            ?: opciones.firstOrNull { p.length >= 3 && normalizar(it).contains(p) }
+    }
+
+    private fun parseNumero(texto: String): Double? {
+        var t = texto.trim().replace("$", "").replace("usd", "", ignoreCase = true).replace(" ", "")
+        if (t.contains('.') && t.contains(',')) t = t.replace(",", "")
+        else if (t.contains(',')) t = if (Regex(",\\d{1,2}$").containsMatchIn(t)) t.replace(',', '.') else t.replace(",", "")
+        return t.toDoubleOrNull()
+    }
+
+    /** Devuelve (monto del descuento, texto del porcentaje) o null si no es válido. */
+    private fun parseDescuento(texto: String, subtotal: Double): Pair<Double, String>? {
+        val t = texto.trim()
+        if (t.endsWith("%")) {
+            val pct = parseNumero(t.dropLast(1)) ?: return null
+            if (pct < 0 || pct > 100) return null
+            return redondear(subtotal * pct / 100) to "${numeroCorto(pct)}%"
+        }
+        val monto = parseNumero(t) ?: return null
+        if (monto < 0 || monto > subtotal) return null
+        return redondear(monto) to ""
+    }
+
+    private fun redondear(v: Double) = Math.round(v * 100) / 100.0
+
+    private fun numeroCorto(v: Double) =
+        if (v == v.toLong().toDouble()) v.toLong().toString() else String.format(Locale.US, "%.1f", v)
+
+    private fun dinero(v: Double) = "$" + String.format(Locale.US, "%,.2f", v)
+
+    private fun resumenLinea(v: VentaRegistrada) =
+        "${v.fechaHora.format(formatoVista)}: ${v.cantidad} × ${v.producto} = ${dinero(v.total)}" +
+                if (v.sucursal.isNotBlank()) " (${v.sucursal})" else ""
+}

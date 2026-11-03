@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Aquí se guardan los PDF y Excel que genera la app (cacheDir/reportes) -->
+    <cache-path name="reportes" path="reportes/" />
+</paths>

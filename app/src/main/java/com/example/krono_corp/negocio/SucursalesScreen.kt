@@ -1,9 +1,10 @@
 package com.example.krono_corp.negocio
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -17,27 +18,107 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.SucursalesRepository
+import kotlinx.coroutines.launch
 
 @Composable
 fun SucursalesScreen(
     navController: NavController,
     negocioData: NegocioData,
-    onGuardarSucursales: (List<SucursalItem>) -> Unit = {}
+    negocioId: String
 ) {
-    val sucursales = remember { mutableStateListOf(*negocioData.sucursales.toTypedArray()) }
+    val sucursales = remember { mutableStateListOf<SucursalItem>() }
+    var cargando by remember { mutableStateOf(true) }
+    var guardando by remember { mutableStateOf(false) }
     var textoBusqueda by remember { mutableStateOf("") }
 
     var mostrarDialogo by remember { mutableStateOf(false) }
     var nombreNuevaSucursal by remember { mutableStateOf("") }
     var codigoSucursalDialogo by remember { mutableStateOf("") }
     var estaActivaDialogo by remember { mutableStateOf(true) }
-    var indiceEditando by remember { mutableStateOf<Int?>(null) }
+    var idEditando by remember { mutableStateOf<String?>(null) }
+
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    fun avisar(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+
+    // Mantiene NegocioData al día para las otras pantallas
+    fun sincronizar() {
+        negocioData.sucursales.clear()
+        negocioData.sucursales.addAll(sucursales)
+    }
+
+    fun abrirDialogo(s: SucursalItem?) {
+        nombreNuevaSucursal = s?.nombre ?: ""
+        codigoSucursalDialogo = s?.codigoAcceso ?: ""
+        estaActivaDialogo = s?.activa ?: true
+        idEditando = s?.id
+        mostrarDialogo = true
+    }
+
+    fun guardarDialogo() {
+        val nombre = nombreNuevaSucursal.trim()
+        if (nombre.isEmpty() || guardando) return
+        val codigo = codigoSucursalDialogo.trim().ifEmpty { "1234" }
+        val editando = idEditando
+        scope.launch {
+            guardando = true
+            if (editando == null) {
+                SucursalesRepository.crear(negocioId, nombre, estaActivaDialogo, codigo)
+                    .onSuccess {
+                        sucursales.add(it)
+                        sincronizar()
+                        mostrarDialogo = false
+                    }
+                    .onFailure { avisar(it.message ?: "No se pudo guardar la sucursal.") }
+            } else {
+                SucursalesRepository.actualizar(
+                    SucursalItem(editando, nombre, estaActivaDialogo, codigo)
+                )
+                    .onSuccess { nueva ->
+                        val i = sucursales.indexOfFirst { it.id == nueva.id }
+                        if (i >= 0) sucursales[i] = nueva
+                        sincronizar()
+                        mostrarDialogo = false
+                    }
+                    .onFailure { avisar(it.message ?: "No se pudo actualizar la sucursal.") }
+            }
+            guardando = false
+        }
+    }
+
+    fun eliminar(s: SucursalItem) {
+        scope.launch {
+            SucursalesRepository.eliminar(s.id)
+                .onSuccess {
+                    sucursales.removeAll { it.id == s.id }
+                    sincronizar()
+                }
+                .onFailure { avisar(it.message ?: "No se pudo eliminar la sucursal.") }
+        }
+    }
+
+    // Carga inicial desde Appwrite
+    LaunchedEffect(negocioId) {
+        SucursalesRepository.listar(negocioId)
+            .onSuccess { lista ->
+                sucursales.clear()
+                sucursales.addAll(lista)
+                sincronizar()
+            }
+            .onFailure { avisar(it.message ?: "No se pudieron cargar las sucursales.") }
+        cargando = false
+    }
+
+    val filtradas = sucursales.filter { it.nombre.contains(textoBusqueda, ignoreCase = true) }
 
     Scaffold(
         containerColor = Color.White,
@@ -102,9 +183,11 @@ fun SucursalesScreen(
                 )
             }
 
-            itemsIndexed(
-                sucursales.filter { it.nombre.contains(textoBusqueda, ignoreCase = true) }
-            ) { index, sucursal ->
+            if (cargando) {
+                item { CircularProgressIndicator(color = KronoBlue) }
+            }
+
+            items(filtradas, key = { it.id }) { sucursal ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -157,15 +240,7 @@ fun SucursalesScreen(
                             }
                         }
 
-                        IconButton(
-                            onClick = {
-                                nombreNuevaSucursal = sucursal.nombre
-                                codigoSucursalDialogo = sucursal.codigoAcceso
-                                estaActivaDialogo = sucursal.activa
-                                indiceEditando = index
-                                mostrarDialogo = true
-                            }
-                        ) {
+                        IconButton(onClick = { abrirDialogo(sucursal) }) {
                             Icon(
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = "Editar",
@@ -174,12 +249,7 @@ fun SucursalesScreen(
                             )
                         }
 
-                        IconButton(
-                            onClick = {
-                                sucursales.removeAt(index)
-                                onGuardarSucursales(sucursales.toList())
-                            }
-                        ) {
+                        IconButton(onClick = { eliminar(sucursal) }) {
                             Icon(
                                 imageVector = Icons.Default.DeleteOutline,
                                 contentDescription = "Eliminar",
@@ -194,13 +264,7 @@ fun SucursalesScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
                 FloatingActionButton(
-                    onClick = {
-                        nombreNuevaSucursal = ""
-                        codigoSucursalDialogo = ""
-                        estaActivaDialogo = true
-                        indiceEditando = null
-                        mostrarDialogo = true
-                    },
+                    onClick = { abrirDialogo(null) },
                     containerColor = KronoBlue,
                     contentColor = Color.White,
                     shape = RoundedCornerShape(16.dp),
@@ -216,13 +280,7 @@ fun SucursalesScreen(
 
             item {
                 OutlinedButton(
-                    onClick = {
-                        nombreNuevaSucursal = ""
-                        codigoSucursalDialogo = ""
-                        estaActivaDialogo = true
-                        indiceEditando = null
-                        mostrarDialogo = true
-                    },
+                    onClick = { abrirDialogo(null) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
@@ -243,10 +301,10 @@ fun SucursalesScreen(
 
     if (mostrarDialogo) {
         AlertDialog(
-            onDismissRequest = { mostrarDialogo = false },
+            onDismissRequest = { if (!guardando) mostrarDialogo = false },
             title = {
                 Text(
-                    text = if (indiceEditando == null) "Nueva Sucursal" else "Editar Sucursal",
+                    text = if (idEditando == null) "Nueva Sucursal" else "Editar Sucursal",
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -281,37 +339,18 @@ fun SucursalesScreen(
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        if (nombreNuevaSucursal.trim().isNotEmpty()) {
-                            val idx = indiceEditando
-                            if (idx == null) {
-                                val id = "SUC-${sucursales.size + 1}"
-                                sucursales.add(
-                                    SucursalItem(
-                                        id = id,
-                                        nombre = nombreNuevaSucursal.trim(),
-                                        activa = estaActivaDialogo,
-                                        codigoAcceso = codigoSucursalDialogo.trim().ifEmpty { "1234" }
-                                    )
-                                )
-                            } else {
-                                sucursales[idx] = sucursales[idx].copy(
-                                    nombre = nombreNuevaSucursal.trim(),
-                                    activa = estaActivaDialogo,
-                                    codigoAcceso = codigoSucursalDialogo.trim().ifEmpty { "1234" }
-                                )
-                            }
-                            onGuardarSucursales(sucursales.toList())
-                            mostrarDialogo = false
-                        }
-                    },
+                    onClick = { guardarDialogo() },
+                    enabled = !guardando,
                     colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
                 ) {
-                    Text(if (indiceEditando == null) "Guardar" else "Actualizar")
+                    Text(if (idEditando == null) "Guardar" else "Actualizar")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { mostrarDialogo = false }) {
+                TextButton(
+                    onClick = { mostrarDialogo = false },
+                    enabled = !guardando
+                ) {
                     Text("Cancelar")
                 }
             }
@@ -325,7 +364,8 @@ fun SucursalesScreenPreview() {
     MaterialTheme {
         SucursalesScreen(
             navController = rememberNavController(),
-            negocioData = NegocioData()
+            negocioData = NegocioData(),
+            negocioId = "preview"
         )
     }
 }

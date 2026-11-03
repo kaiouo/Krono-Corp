@@ -1,12 +1,12 @@
 package com.example.krono_corp.negocio
 
+import com.example.krono_corp.data.PreguntaVenta
+
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object MiNegocio : Screen("mi_negocio")
     object Sucursales : Screen("sucursales")
     object Configuracion : Screen("configuracion")
-
-    object Ventas : Screen("ventas")
 
     // Modulo de Persona 4
     object Asistente : Screen("asistente")
@@ -24,31 +24,27 @@ data class SucursalItem(
 
 // Modulo de Persona 4: lo que genera el asistente y las cuentas adicionales
 // para administrar el mismo negocio sin pedir otro correo.
-// El id es el id real del documento en Appwrite (vacio solo mientras se esta guardando).
 data class ReporteGenerado(
-    val id: String,
+    val id: Int,
     val titulo: String,
     val fecha: String,
-    val contenido: String
+    val contenido: String,
+    val archivos: List<String> = emptyList()
 )
 
 data class GraficoGenerado(
-    val id: String,
+    val id: Int,
     val titulo: String,
     val fecha: String,
     val datos: List<Pair<String, Int>>
 )
 
 data class CuentaAdministracion(
-    val id: String = "",
     val nombre: String,
     val password: String
 )
 
 data class NegocioData(
-    // Id del documento "negocios" en Appwrite; vacio hasta que se carga o se crea
-    var id: String = "",
-    var ownerId: String = "",
     var nombreNegocio: String = "Veterinaria Miau",
     val propietarioEmail: String = "gatoGordo@gmail.com",
     val preguntasIA: MutableList<String> = mutableListOf(
@@ -62,5 +58,7 @@ data class NegocioData(
     // Modulo de Persona 4
     val historialReportes: MutableList<ReporteGenerado> = mutableListOf(),
     val historialGraficos: MutableList<GraficoGenerado> = mutableListOf(),
-    val cuentasAdicionales: MutableList<CuentaAdministracion> = mutableListOf()
+    val cuentasAdicionales: MutableList<CuentaAdministracion> = mutableListOf(),
+    // Preguntas que la IA hace al registrar una venta (se editan en MiNegocioScreen)
+    val preguntasVenta: MutableList<PreguntaVenta> = PreguntaVenta.porDefecto().toMutableList()
 )

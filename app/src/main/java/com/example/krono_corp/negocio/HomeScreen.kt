@@ -1,5 +1,6 @@
 package com.example.krono_corp.negocio
 
+import androidx.compose.runtime.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -38,6 +39,9 @@ fun HomeScreen(
     negocioData: NegocioData,
     onCerrarSesion: () -> Unit = {}
 ) {
+    // Controla el menú del avatar (Cerrar sesión)
+    var menuAbierto by remember { mutableStateOf(false) }
+
     Scaffold(
         containerColor = KronoBackground,
         bottomBar = {
@@ -90,19 +94,35 @@ fun HomeScreen(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFD8D2C2)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = "Avatar",
-                        tint = Color.White,
-                        modifier = Modifier.size(26.dp)
-                    )
+                // Avatar con menú desplegable (Cerrar sesión)
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFD8D2C2))
+                            .clickable { menuAbierto = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Avatar",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuAbierto,
+                        onDismissRequest = { menuAbierto = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Cerrar sesión") },
+                            onClick = {
+                                menuAbierto = false
+                                onCerrarSesion()
+                            }
+                        )
+                    }
                 }
             }
 
@@ -139,9 +159,6 @@ fun HomeScreen(
                 },
                 AccionCardItem("Sucursales", Icons.Outlined.Domain, KronoBlue) {
                     navController.navigate(Screen.Sucursales.route)
-                },
-                AccionCardItem("Ventas e\ninventario", Icons.Outlined.PointOfSale, Color(0xFF1EB564)) {
-                    navController.navigate(Screen.Ventas.route)
                 },
                 AccionCardItem("Asistente", Icons.Outlined.ChatBubbleOutline, Color(0xFF2F80ED)) {
                     navController.navigate(Screen.Asistente.route)

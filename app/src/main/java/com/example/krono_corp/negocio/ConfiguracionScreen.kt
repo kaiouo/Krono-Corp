@@ -10,7 +10,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -40,7 +39,7 @@ data class ConfigOptionFigma(
 fun ConfiguracionScreen(
     navController: NavController,
     negocioData: NegocioData,
-    onCerrarSesion: () -> Unit = {}
+    onCerrarSesion: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -68,7 +67,10 @@ fun ConfiguracionScreen(
             Color(0xFFEB5757),
             isDestructive = true
         ) {
-            onCerrarSesion()
+            navController.navigate(Screen.Home.route) {
+                popUpTo(Screen.Home.route) { inclusive = false }
+                launchSingleTop = true
+            }
         }
     )
 
@@ -194,7 +196,8 @@ fun ConfiguracionScreenPreview() {
     MaterialTheme {
         ConfiguracionScreen(
             navController = rememberNavController(),
-            negocioData = NegocioData()
+            negocioData = NegocioData(),
+            onCerrarSesion = {}
         )
     }
 }

@@ -3,7 +3,6 @@ package com.example.krono_corp.data
 import android.util.Log
 import io.appwrite.ID
 import io.appwrite.Permission
-import io.appwrite.Query
 import io.appwrite.Role
 import io.appwrite.exceptions.AppwriteException
 import io.appwrite.models.User
@@ -28,7 +27,7 @@ object AuthRepository {
     private const val TAG = "KronoAuth"
 
     private val account get() = AppwriteClient.account
-    private val databases get() = AppwriteClient.databases
+    private val tablesDB get() = AppwriteClient.tablesDB
 
     /** Usuario con sesión activa en el dispositivo (o null si no hay). */
     suspend fun currentUser(): AppUser? = try {
@@ -43,10 +42,9 @@ object AuthRepository {
         email: String,
         phone: String,
         password: String,
-        rol: Rol,
-        aliasPersonalizado: String? = null
+        rol: Rol
     ): Result<AppUser> = safe {
-        val alias = aliasPersonalizado?.trim()?.takeIf { it.isNotEmpty() } ?: email.substringBefore("@")
+        val alias = email.substringBefore("@")
 
         // 1) Cuenta en Appwrite Auth
         val cuenta = account.create(
@@ -62,26 +60,25 @@ object AuthRepository {
         val sesion = account.createEmailPasswordSession(email = email, password = password)
         Log.i(TAG, "REGISTRO paso 2 OK: sesión creada ${sesion.id}")
 
-        // 3) Perfil en la coleccion "usuarios"
+        // 3) Perfil en la tabla "usuarios"
         try {
-            databases.createDocument(
+            tablesDB.createRow(
                 databaseId = AppwriteClient.DATABASE_ID,
-                collectionId = AppwriteClient.COLECCION_USUARIOS,
-                documentId = cuenta.id,
+                tableId = AppwriteClient.TABLE_ID,
+                rowId = cuenta.id,
                 data = mapOf(
                     "alias" to alias,
                     "email" to email,
                     "phoneNumber" to phone,
                     "role" to rol.codigo
                 ),
-                // Cualquier usuario con sesion puede leer el perfil (lo necesita el Gerente
-                // para ver la lista de administradores), pero solo el dueño lo puede editar
+                // Solo el dueño de la fila puede leerla y editarla
                 permissions = listOf(
-                    Permission.read(Role.users()),
+                    Permission.read(Role.user(cuenta.id)),
                     Permission.update(Role.user(cuenta.id))
                 )
             )
-            Log.i(TAG, "REGISTRO paso 3 OK: documento creado en usuarios")
+            Log.i(TAG, "REGISTRO paso 3 OK: fila creada en usuarios")
         } catch (e: Exception) {
             closeSessionQuietly()
             throw e
@@ -112,33 +109,15 @@ object AuthRepository {
         closeSessionQuietly()
     }
 
-    /** Lista los usuarios con el rol indicado (lo usa el Gerente para ver sus administradores). */
-    suspend fun listarPorRol(rol: Rol): Result<List<AppUser>> = safe {
-        databases.listDocuments(
-            databaseId = AppwriteClient.DATABASE_ID,
-            collectionId = AppwriteClient.COLECCION_USUARIOS,
-            queries = listOf(Query.equal("role", rol.codigo), Query.limit(100))
-        ).documents.map { doc ->
-            val d = doc.data
-            AppUser(
-                id = doc.id,
-                alias = d["alias"] as? String ?: "",
-                email = d["email"] as? String ?: "",
-                phone = d["phoneNumber"] as? String ?: "",
-                role = rol
-            )
-        }
-    }
-
     // ---------- helpers ----------
 
     private suspend fun perfilDe(cuenta: User<Map<String, Any>>): AppUser {
-        val documento = databases.getDocument(
+        val fila = tablesDB.getRow(
             databaseId = AppwriteClient.DATABASE_ID,
-            collectionId = AppwriteClient.COLECCION_USUARIOS,
-            documentId = cuenta.id
+            tableId = AppwriteClient.TABLE_ID,
+            rowId = cuenta.id
         )
-        val d = documento.data
+        val d = fila.data
         return AppUser(
             id = cuenta.id,
             alias = d["alias"] as? String ?: cuenta.email.substringBefore("@"),

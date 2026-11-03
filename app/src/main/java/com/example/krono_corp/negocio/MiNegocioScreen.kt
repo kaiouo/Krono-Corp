@@ -18,12 +18,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.PreguntaVenta
 
 @Composable
 fun MiNegocioScreen(
     navController: NavController,
     negocioData: NegocioData,
-    onGuardarCambios: (String, List<String>) -> Unit = { _, _ -> }
+    onGuardarCambios: (String, List<String>) -> Unit = { _, _ -> },
+    onGuardarPreguntasVenta: (List<PreguntaVenta>) -> Unit = {}
 ) {
     var nombreNegocio by remember { mutableStateOf(negocioData.nombreNegocio) }
     val preguntas = remember { mutableStateListOf(*negocioData.preguntasIA.toTypedArray()) }
@@ -33,6 +35,12 @@ fun MiNegocioScreen(
     var mostrarDialogoEditar by remember { mutableStateOf(false) }
     var textoPreguntaEditando by remember { mutableStateOf("") }
     var indiceEditando by remember { mutableStateOf<Int?>(null) }
+
+    // Preguntas que la IA hace al registrar una venta
+    val preguntasVenta = remember { mutableStateListOf(*negocioData.preguntasVenta.toTypedArray()) }
+    var nuevaPreguntaVenta by remember { mutableStateOf("") }
+    var ventaIndiceEditando by remember { mutableStateOf<Int?>(null) }
+    var textoVentaEditando by remember { mutableStateOf("") }
 
     Scaffold(
         containerColor = Color.White,
@@ -208,12 +216,153 @@ fun MiNegocioScreen(
                 }
             }
 
+            // Preguntas que la IA hace al registrar una venta
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "PREGUNTAS AL REGISTRAR UNA VENTA",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = KronoTextMuted
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "La IA te hará estas preguntas en este orden. Puedes cambiar el texto, " +
+                            "desactivar las opcionales o agregar las tuyas.",
+                    fontSize = 12.sp,
+                    color = KronoTextMuted
+                )
+            }
+
+            itemsIndexed(preguntasVenta) { index, pv ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${index + 1}. ${pv.texto}",
+                                fontSize = 13.sp,
+                                color = if (pv.activa) KronoTextDark else KronoTextMuted
+                            )
+                            Text(
+                                text = when {
+                                    pv.personalizada -> "Personalizada"
+                                    pv.obligatoria -> "Obligatoria"
+                                    else -> if (pv.activa) "Opcional" else "Opcional (desactivada)"
+                                },
+                                fontSize = 11.sp,
+                                color = KronoTextMuted
+                            )
+                        }
+                        if (!pv.obligatoria) {
+                            Switch(
+                                checked = pv.activa,
+                                onCheckedChange = { preguntasVenta[index] = pv.copy(activa = it) }
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                textoVentaEditando = pv.texto
+                                ventaIndiceEditando = index
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Editar",
+                                tint = KronoBlue,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        if (pv.personalizada) {
+                            IconButton(onClick = { preguntasVenta.removeAt(index) }) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = "Eliminar",
+                                    tint = Color(0xFFEB5757),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Text(
+                    text = "Agregar una pregunta propia para las ventas",
+                    fontSize = 12.sp,
+                    color = KronoTextMuted
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = nuevaPreguntaVenta,
+                        onValueChange = { nuevaPreguntaVenta = it },
+                        placeholder = { Text("ej. ¿Número de factura?", fontSize = 13.sp, color = KronoTextMuted) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = Color(0xFFE2E8F0),
+                            focusedBorderColor = KronoBlue,
+                            unfocusedContainerColor = KronoSurfaceVariant,
+                            focusedContainerColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (nuevaPreguntaVenta.trim().isNotEmpty()) {
+                                preguntasVenta.add(
+                                    PreguntaVenta(
+                                        id = "CUSTOM-${System.currentTimeMillis()}",
+                                        texto = nuevaPreguntaVenta.trim(),
+                                        personalizada = true
+                                    )
+                                )
+                                nuevaPreguntaVenta = ""
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFE8F1FF),
+                            contentColor = KronoBlue
+                        ),
+                        modifier = Modifier.height(52.dp)
+                    ) {
+                        Text("Agregar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        preguntasVenta.clear()
+                        preguntasVenta.addAll(PreguntaVenta.porDefecto())
+                    }
+                ) {
+                    Text("Restablecer preguntas de venta", fontSize = 12.sp, color = Color(0xFFEB5757))
+                }
+            }
+
             // Botón Guardar Cambios
             item {
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
                         onGuardarCambios(nombreNegocio, preguntas.toList())
+                        onGuardarPreguntasVenta(preguntasVenta.toList())
                         navController.popBackStack()
                     },
                     modifier = Modifier
@@ -232,6 +381,36 @@ fun MiNegocioScreen(
                 Spacer(modifier = Modifier.height(20.dp))
             }
         }
+    }
+
+    // Modal para editar el texto de una pregunta de venta
+    ventaIndiceEditando?.let { indice ->
+        AlertDialog(
+            onDismissRequest = { ventaIndiceEditando = null },
+            title = { Text("Editar pregunta de venta", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = textoVentaEditando,
+                    onValueChange = { textoVentaEditando = it },
+                    label = { Text("Pregunta") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (textoVentaEditando.trim().isNotEmpty() && indice in preguntasVenta.indices) {
+                            preguntasVenta[indice] = preguntasVenta[indice].copy(texto = textoVentaEditando.trim())
+                        }
+                        ventaIndiceEditando = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
+                ) { Text("Actualizar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { ventaIndiceEditando = null }) { Text("Cancelar") }
+            }
+        )
     }
 
     // Modal para editar la pregunta seleccionada

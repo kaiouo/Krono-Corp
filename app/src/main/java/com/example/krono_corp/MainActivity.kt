@@ -1,25 +1,19 @@
 package com.example.krono_corp
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -29,18 +23,21 @@ import com.example.krono_corp.Login.RegisterScreen
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AppwriteClient
 import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.ConfigVentasRepository
+import com.example.krono_corp.data.HistorialRepository
 import com.example.krono_corp.data.NegocioRepository
+import com.example.krono_corp.data.ReportesRepository
 import com.example.krono_corp.data.Rol
-import com.example.krono_corp.negocio.SucursalItem
 import com.example.krono_corp.negocio.AsistenteScreen
 import com.example.krono_corp.negocio.ConfiguracionScreen
+import com.example.krono_corp.negocio.GraficoGenerado
 import com.example.krono_corp.negocio.HistorialGraficosScreen
 import com.example.krono_corp.negocio.HistorialReportesScreen
 import com.example.krono_corp.negocio.HomeScreen
 import com.example.krono_corp.negocio.MiNegocioScreen
 import com.example.krono_corp.negocio.NegocioData
 import com.example.krono_corp.negocio.NuevaCuentaAdminScreen
-import com.example.krono_corp.negocio.RegistroVentasScreen
+import com.example.krono_corp.negocio.ReporteGenerado
 import com.example.krono_corp.negocio.Screen
 import com.example.krono_corp.negocio.SucursalesScreen
 import kotlinx.coroutines.launch
@@ -109,7 +106,10 @@ fun KronoApp() {
         Pantalla.SESION -> usuario?.let { u ->
             when (u.role) {
                 // GERENTE -> panel de administración
-                Rol.GERENTE -> AdminScreen(alCerrarSesion = { cerrarSesion() })
+                Rol.GERENTE -> AdminScreen(
+                    usuario = u,
+                    alCerrarSesion = { cerrarSesion() }
+                )
 
                 // DUENO y SUPERVISOR -> flujo del negocio (empieza en MiNegocioScreen)
                 Rol.DUENO, Rol.SUPERVISOR -> NegocioNavHost(
@@ -128,19 +128,6 @@ private fun PantallaCargando() {
     }
 }
 
-@Composable
-private fun PantallaError(mensaje: String, alCerrarSesion: () -> Unit) {
-    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(mensaje, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(16.dp))
-            OutlinedButton(onClick = alCerrarSesion) {
-                Text("Cerrar sesión")
-            }
-        }
-    }
-}
-
 /**
  * Flujo de DUENO y SUPERVISOR: todas las pantallas del paquete "negocio"
  * comparten un NavController y un mismo NegocioData.
@@ -152,43 +139,81 @@ private fun NegocioNavHost(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    fun avisarError(mensaje: String?, porDefecto: String) {
+        Toast.makeText(context, mensaje ?: porDefecto, Toast.LENGTH_LONG).show()
+    }
+
+    // Solo el SUPERVISOR envía sus reportes y gráficos a Appwrite (para que su gerente los vea)
+    fun enviarAlGerente(tipo: String, titulo: String, fecha: String, contenido: String) {
+        if (usuario.role != Rol.SUPERVISOR) return
+        scope.launch {
+            ReportesRepository.guardar(usuario, tipo, titulo, fecha, contenido)
+                .onFailure {
+                    avisarError(it.message, "No se pudo enviar el reporte a tu gerente.")
+                }
+        }
+    }
+
+    // DUENO y SUPERVISOR guardan su propio historial de reportes (texto, PDF, Excel) y gráficos
+    fun guardarReporteEnHistorial(r: ReporteGenerado) {
+        scope.launch {
+            HistorialRepository.guardarReporte(usuario.id, r)
+                .onFailure { avisarError(it.message, "No se pudo guardar el reporte en el historial.") }
+        }
+    }
+
+    fun guardarGraficoEnHistorial(g: GraficoGenerado) {
+        scope.launch {
+            HistorialRepository.guardarGrafico(usuario.id, g)
+                .onFailure { avisarError(it.message, "No se pudo guardar el gráfico en el historial.") }
+        }
+    }
 
     // Un único objeto compartido por todas las pantallas (sus listas son mutables)
     val negocio = remember(usuario.id) {
         NegocioData(propietarioEmail = usuario.email)
     }
-    var cargandoNegocio by remember(usuario.id) { mutableStateOf(true) }
-    var errorNegocio by remember(usuario.id) { mutableStateOf("") }
 
-    // Carga (o crea, si es la primera vez) el negocio real del usuario en Appwrite,
-    // junto con sus sucursales. Antes de esto, negocio.id está vacío.
+    // Carga lo guardado en Appwrite antes de mostrar las pantallas
+    var configLista by remember(usuario.id) { mutableStateOf(false) }
     LaunchedEffect(usuario.id) {
-        NegocioRepository.obtenerOCrearNegocio(usuario.id, usuario.email)
-            .onSuccess { remoto ->
-                negocio.id = remoto.id
-                negocio.ownerId = remoto.ownerId
-                negocio.nombreNegocio = remoto.nombreNegocio
-                negocio.preguntasIA.clear()
-                negocio.preguntasIA.addAll(remoto.preguntasIA)
-
-                NegocioRepository.listarSucursales(remoto.id).onSuccess { sucursales ->
-                    negocio.sucursales.clear()
-                    negocio.sucursales.addAll(
-                        sucursales.map { SucursalItem(it.id, it.nombre, it.activa, it.codigoAcceso) }
-                    )
-                }
-                errorNegocio = ""
+        // Preguntas de venta (tabla "usuarios")
+        ConfigVentasRepository.cargarPreguntas(usuario.id).onSuccess { guardadas ->
+            if (guardadas != null) {
+                negocio.preguntasVenta.clear()
+                negocio.preguntasVenta.addAll(guardadas)
             }
-            .onFailure { e -> errorNegocio = e.message ?: "No se pudo cargar el negocio." }
-        cargandoNegocio = false
-    }
+        }
 
-    if (cargandoNegocio) {
-        PantallaCargando()
-        return
+        // Nombre del negocio y preguntas para la IA (tabla "negocios")
+        NegocioRepository.cargar(usuario.id).onSuccess { guardado ->
+            if (guardado != null) {
+                if (guardado.nombreNegocio.isNotBlank()) {
+                    negocio.nombreNegocio = guardado.nombreNegocio
+                }
+                guardado.preguntasIA?.let {
+                    negocio.preguntasIA.clear()
+                    negocio.preguntasIA.addAll(it)
+                }
+            }
+        }
+
+        // Historial de reportes (texto, PDF, Excel) y gráficos (tabla "reportes")
+        HistorialRepository.cargar(usuario.id).onSuccess { historial ->
+            negocio.historialReportes.clear()
+            negocio.historialReportes.addAll(historial.reportes)
+            negocio.historialGraficos.clear()
+            negocio.historialGraficos.addAll(historial.graficos)
+        }
+        .onFailure {
+            avisarError(it.message, "No se pudo cargar tu historial de reportes y gráficos.")
+        }
+        configLista = true
     }
-    if (errorNegocio.isNotBlank()) {
-        PantallaError(mensaje = errorNegocio, alCerrarSesion = alCerrarSesion)
+    if (!configLista) {
+        PantallaCargando()
         return
     }
 
@@ -204,10 +229,6 @@ private fun NegocioNavHost(
             )
         }
 
-        composable(Screen.Ventas.route) {
-            RegistroVentasScreen(navController = navController, negocioData = negocio)
-        }
-
         composable(Screen.MiNegocio.route) {
             MiNegocioScreen(
                 navController = navController,
@@ -217,7 +238,18 @@ private fun NegocioNavHost(
                     negocio.preguntasIA.clear()
                     negocio.preguntasIA.addAll(preguntas)
                     scope.launch {
-                        NegocioRepository.actualizarNegocio(negocio.id, nombre, preguntas)
+                        NegocioRepository.guardar(usuario.id, nombre, preguntas).onFailure {
+                            avisarError(it.message, "No se pudo guardar el negocio.")
+                        }
+                    }
+                },
+                onGuardarPreguntasVenta = { lista ->
+                    negocio.preguntasVenta.clear()
+                    negocio.preguntasVenta.addAll(lista)
+                    scope.launch {
+                        ConfigVentasRepository.guardarPreguntas(usuario.id, lista).onFailure {
+                            avisarError(it.message, "No se pudieron guardar las preguntas de venta.")
+                        }
                     }
                 }
             )
@@ -227,17 +259,7 @@ private fun NegocioNavHost(
             SucursalesScreen(
                 navController = navController,
                 negocioData = negocio,
-                onGuardarSucursales = { lista ->
-                    negocio.sucursales.clear()
-                    negocio.sucursales.addAll(lista)
-                    scope.launch {
-                        NegocioRepository.reemplazarSucursales(
-                            negocioId = negocio.id,
-                            ownerId = negocio.ownerId,
-                            nuevas = lista.map { Triple(it.id, it.nombre, it.activa to it.codigoAcceso) }
-                        )
-                    }
-                }
+                negocioId = usuario.id
             )
         }
 
@@ -250,7 +272,22 @@ private fun NegocioNavHost(
         }
 
         composable(Screen.Asistente.route) {
-            AsistenteScreen(navController = navController, negocioData = negocio)
+            AsistenteScreen(
+                navController = navController,
+                negocioData = negocio,
+                usuario = usuario,
+                onReporteGenerado = { r ->
+                    guardarReporteEnHistorial(r)
+                    enviarAlGerente(ReportesRepository.TIPO_REPORTE, r.titulo, r.fecha, r.contenido)
+                },
+                onGraficoGenerado = { g ->
+                    guardarGraficoEnHistorial(g)
+                    enviarAlGerente(
+                        ReportesRepository.TIPO_GRAFICO, g.titulo, g.fecha,
+                        ReportesRepository.codificarDatos(g.datos)
+                    )
+                }
+            )
         }
 
         composable(Screen.HistorialReportes.route) {
