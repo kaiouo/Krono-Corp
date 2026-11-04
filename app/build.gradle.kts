@@ -5,8 +5,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// La API key de Groq se lee de local.properties (nunca se sube al repo).
-// Agrega esta linea a tu local.properties: GROQ_API_KEY=gsk_tu_clave_aqui
 val localProperties = Properties().apply {
     val archivo = rootProject.file("local.properties")
     if (archivo.exists()) archivo.inputStream().use { load(it) }
