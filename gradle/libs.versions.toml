@@ -9,7 +9,7 @@ activityCompose = "1.8.0"
 kotlin = "2.2.10"
 composeBom = "2026.02.01"
 navigationCompose = "2.8.5"
-appwrite = "8.1.0"
+appwrite = "13.0.0"
 
 [libraries]
 io-appwrite-sdk = { group = "io.appwrite", name = "sdk-for-android", version.ref = "appwrite" }

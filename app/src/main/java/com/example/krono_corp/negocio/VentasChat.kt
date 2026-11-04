@@ -89,7 +89,10 @@ class VentasChat(
     context: Context,
     /** Se llama cada vez que se exporta un PDF/Excel, para guardarlo en el historial de reportes. */
     private val alExportar: (titulo: String, contenido: String, archivos: List<File>) -> Unit =
-        { _, _, _ -> }
+        { _, _, _ -> },
+    // Item 3: permite agregar una columna/pregunta nueva al registro de ventas (y por lo tanto
+    // al Excel exportado) escribiéndolo en el chat, sin entrar a "Mi Negocio".
+    private val alGuardarPreguntas: (List<PreguntaVenta>) -> Unit = {}
 ) {
     private val appContext = context.applicationContext
     private val groq = GroqService()      // redacta las respuestas de consulta (sin memoria)
@@ -122,6 +125,7 @@ class VentasChat(
             esEliminar(p) -> iniciarEliminar(p)
             esExportar(p) -> exportar(p)
             esRegistrar(p) -> iniciarRegistro()
+            esAgregarColumna(p) -> agregarColumna(texto, p)
             esConsulta(p) -> consultar(texto, p)
             else -> null
         }
@@ -184,6 +188,44 @@ class VentasChat(
 
     private fun esEliminar(p: String) =
         "venta" in p && listOf("elimin", "borr", "anul", "quitar", "quita ").any { it in p }
+
+    // Item 3: "agrega una columna/pregunta sobre el nombre del cliente", "quiero una pregunta
+    // nueva para...", etc. Crea una pregunta personalizada: aparece en el registro de ventas
+    // (chat) y como columna extra en el Excel exportado.
+    private fun esAgregarColumna(p: String): Boolean {
+        val objeto = "columna" in p || "pregunta" in p || "campo" in p
+        val verbo = listOf("agreg", "anadir", "anade", "crea", "nueva", "quiero una").any { it in p }
+        return objeto && verbo && "quitar" !in p && "elimin" !in p && "borr" !in p
+    }
+
+    private fun agregarColumna(textoOriginal: String, p: String): RespuestaChat {
+        val separador = Regex("\\b(sobre|para|de|que diga|llamada)\\b")
+        val despues = separador.find(p)?.range?.last?.plus(1)
+        val crudo = if (despues != null) textoOriginal.substring(despues).trim() else ""
+        if (crudo.length < 3) {
+            return RespuestaChat(
+                "¿Sobre qué quieres la nueva pregunta? Dime, por ejemplo: " +
+                    "«agrega una columna sobre el nombre del cliente»."
+            )
+        }
+        val etiqueta = crudo.replaceFirstChar { it.uppercase() }.trimEnd('.', '?', '!')
+        val yaExiste = negocio.preguntasVenta.any { it.personalizada && normalizar(it.texto).contains(normalizar(etiqueta)) }
+        if (yaExiste) return RespuestaChat("Ya tienes una pregunta parecida a «$etiqueta». No agregué nada nuevo.")
+
+        val nueva = PreguntaVenta(
+            id = "EXTRA_${System.currentTimeMillis()}",
+            texto = "¿Cuál es $etiqueta?".let { if (etiqueta.startsWith("¿")) etiqueta else it },
+            activa = true,
+            personalizada = true
+        )
+        negocio.preguntasVenta.add(nueva)
+        alGuardarPreguntas(negocio.preguntasVenta.toList())
+        return RespuestaChat(
+            "Listo ✅ Agregué la pregunta «${nueva.texto}». A partir de ahora te la voy a preguntar " +
+                "cuando registres una venta, y va a salir como columna aparte en el Excel que exportes. " +
+                "También puedes editarla en «Mi Negocio»."
+        )
+    }
 
     private fun esExportar(p: String): Boolean {
         val formato = "excel" in p || "xlsx" in p || "pdf" in p || "hoja de calculo" in p

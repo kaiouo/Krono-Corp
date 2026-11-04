@@ -32,7 +32,9 @@ import kotlinx.coroutines.launch
 fun SucursalesScreen(
     navController: NavController,
     negocioData: NegocioData,
-    negocioId: String
+    negocioId: String,
+    // Item 9: el supervisor solo puede VER las sucursales, no agregar/editar/eliminar.
+    puedeEditar: Boolean = true
 ) {
     val sucursales = remember { mutableStateListOf<SucursalItem>() }
     var cargando by remember { mutableStateOf(true) }
@@ -240,61 +242,74 @@ fun SucursalesScreen(
                             }
                         }
 
-                        IconButton(onClick = { abrirDialogo(sucursal) }) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Editar",
-                                tint = KronoTextMuted,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                        if (puedeEditar) {
+                            IconButton(onClick = { abrirDialogo(sucursal) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Editar",
+                                    tint = KronoTextMuted,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
 
-                        IconButton(onClick = { eliminar(sucursal) }) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = "Eliminar",
-                                tint = Color(0xFFEB5757),
-                                modifier = Modifier.size(20.dp)
-                            )
+                            IconButton(onClick = { eliminar(sucursal) }) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = "Eliminar",
+                                    tint = Color(0xFFEB5757),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                FloatingActionButton(
-                    onClick = { abrirDialogo(null) },
-                    containerColor = KronoBlue,
-                    contentColor = Color.White,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.size(52.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Agregar",
-                        modifier = Modifier.size(26.dp)
-                    )
+            if (puedeEditar) {
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FloatingActionButton(
+                        onClick = { abrirDialogo(null) },
+                        containerColor = KronoBlue,
+                        contentColor = Color.White,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Agregar",
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
-            }
 
-            item {
-                OutlinedButton(
-                    onClick = { abrirDialogo(null) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, KronoBlue),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = KronoBlue)
-                ) {
-                    Text(
-                        text = "Agregar Sucursal",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
+                item {
+                    OutlinedButton(
+                        onClick = { abrirDialogo(null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, KronoBlue),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = KronoBlue)
+                    ) {
+                        Text(
+                            text = "Agregar Sucursal",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
                 }
-                Spacer(modifier = Modifier.height(20.dp))
+            } else {
+                item {
+                    Text(
+                        "Solo el dueño del negocio puede agregar, editar o eliminar sucursales.",
+                        fontSize = 12.sp,
+                        color = KronoTextMuted
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
             }
         }
     }

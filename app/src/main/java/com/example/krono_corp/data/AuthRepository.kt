@@ -14,7 +14,8 @@ data class AppUser(
     val alias: String,
     val email: String,
     val phone: String,
-    val role: Rol
+    val role: Rol,
+    val emailVerificado: Boolean = false
 )
 
 /**
@@ -109,6 +110,34 @@ object AuthRepository {
         closeSessionQuietly()
     }
 
+    // ---------- Recuperar contraseña (botón "¿Olvidé mi contraseña?") ----------
+
+    /** Envía el correo de recuperación. El enlace abre la app directo (deep link). */
+    suspend fun solicitarRecuperacion(email: String): Result<Unit> = safe {
+        account.createRecovery(email = email, url = "kronocorp://recovery")
+        Unit
+    }
+
+    /** Se llama cuando el usuario abre el enlace del correo y escribe su nueva contraseña. */
+    suspend fun confirmarRecuperacion(userId: String, secret: String, nuevaContrasena: String): Result<Unit> = safe {
+        account.updateRecovery(userId = userId, secret = secret, password = nuevaContrasena)
+        Unit
+    }
+
+    // ---------- Verificación de email ----------
+
+    /** Envía el correo de verificación a la cuenta con sesión activa. */
+    suspend fun enviarVerificacion(): Result<Unit> = safe {
+        account.createEmailVerification(url = "kronocorp://verify")
+        Unit
+    }
+
+    /** Se llama cuando el usuario abre el enlace del correo de verificación. */
+    suspend fun confirmarVerificacion(userId: String, secret: String): Result<Unit> = safe {
+        account.updateEmailVerification(userId = userId, secret = secret)
+        Unit
+    }
+
     // ---------- helpers ----------
 
     private suspend fun perfilDe(cuenta: User<Map<String, Any>>): AppUser {
@@ -123,7 +152,8 @@ object AuthRepository {
             alias = d["alias"] as? String ?: cuenta.email.substringBefore("@"),
             email = d["email"] as? String ?: cuenta.email,
             phone = d["phoneNumber"] as? String ?: "",
-            role = Rol.desdeCodigo(d["role"] as? String)
+            role = Rol.desdeCodigo(d["role"] as? String),
+            emailVerificado = cuenta.emailVerification
         )
     }
 

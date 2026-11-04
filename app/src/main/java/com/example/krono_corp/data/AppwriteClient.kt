@@ -8,6 +8,10 @@ import io.appwrite.services.TablesDB
 /**
  * Único punto de configuración de Appwrite.
  * Se inicializa UNA vez en MainActivity.onCreate().
+ *
+ * Usamos el servicio "TablesDB" (Tables/Rows), el SDK de Appwrite para Android
+ * 13.0.0+ lo trae. El servicio anterior "Databases" (Collections/Documents)
+ * sigue funcionando pero Appwrite lo marcó en desuso desde la versión 1.8 del servidor.
  */
 object AppwriteClient {
 

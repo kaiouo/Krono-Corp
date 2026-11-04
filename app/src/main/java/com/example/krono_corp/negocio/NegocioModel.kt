@@ -7,6 +7,7 @@ sealed class Screen(val route: String) {
     object MiNegocio : Screen("mi_negocio")
     object Sucursales : Screen("sucursales")
     object Configuracion : Screen("configuracion")
+    object Metricas : Screen("metricas")
 
     // Modulo de Persona 4
     object Asistente : Screen("asistente")

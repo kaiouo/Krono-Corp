@@ -1,93 +1,466 @@
-package com.example.krono_corp.Login
+package com.example.krono_corp.negocio
 
+import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.data.Rol
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.ConfigVentasRepository
+import com.example.krono_corp.data.PreguntaVenta
+import com.example.krono_corp.reportes.abrirArchivo
+import com.example.krono_corp.reportes.compartirArchivo
+import kotlinx.coroutines.launch
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
-/** Exposed Dropdown Menu con el mismo estilo que AuthTextField */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun RoleDropdown(
-    label: String,
-    seleccionado: Rol,
-    onSeleccion: (Rol) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expandido by remember { mutableStateOf(false) }
+// ==============================================================
+// Modulo de Persona 4: Asistente (ChatBot) de DUENO y SUPERVISOR.
+// El "cerebro" (registrar venta, consultar, exportar, eliminar) esta en VentasChat.kt;
+// esta pantalla solo dibuja el chat y reparte los mensajes hacia VentasChat / Groq.
+// Generar reporte y generar grafico usan las ventas REALES (tabla "registro_ventas"),
+// no datos de ejemplo.
+// ==============================================================
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = KronoColors.TextoOscuro
+private val formatoFecha = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+
+data class MensajeChatNegocio(
+    val texto: String,
+    val esUsuario: Boolean,
+    val archivos: List<File> = emptyList(),
+    val grafico: List<Pair<String, Int>>? = null
+)
+
+/** Guarda el chat aunque el usuario cambie de pestaña dentro de la app. */
+class AsistenteNegocioViewModel : ViewModel() {
+
+    val mensajes = mutableStateListOf<MensajeChatNegocio>()
+    var ocupado by mutableStateOf(false)
+        private set
+
+    private var chat: VentasChat? = null
+    private var iniciado = false
+
+    fun iniciar(usuario: AppUser, negocio: NegocioData, context: Context, onArchivoExportado: (String, String, List<File>) -> Unit) {
+        if (iniciado) return
+        iniciado = true
+        chat = VentasChat(
+            usuario = usuario,
+            negocio = negocio,
+            context = context,
+            alExportar = { titulo, contenido, archivos ->
+                onArchivoExportado(titulo, contenido, archivos)
+            },
+            alGuardarPreguntas = { lista: List<PreguntaVenta> ->
+                viewModelScope.launch {
+                    ConfigVentasRepository.guardarPreguntas(usuario.id, lista)
+                }
+            }
         )
-        Spacer(Modifier.height(6.dp))
+        bot(
+            "Hola, ${usuario.alias.ifBlank { usuario.email }}. Soy Krono, el asistente de " +
+                "${negocio.nombreNegocio}.\n\n" +
+                "Puedo registrar una venta, consultar tus ventas, generar gráficos y exportarlas " +
+                "a Excel o PDF.\n\n" +
+                "Prueba con los botones o escribe, por ejemplo: «registrar venta», «ventas de este mes» " +
+                "o «exporta mis ventas del mes pasado en Excel»."
+        )
+    }
 
-        ExposedDropdownMenuBox(
-            expanded = expandido,
-            onExpandedChange = { expandido = it }
-        ) {
-            OutlinedTextField(
-                value = seleccionado.etiqueta,
-                onValueChange = {},
-                readOnly = true,
-                singleLine = true,
-                leadingIcon = {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = KronoColors.TextoSuave)
+    private fun bot(texto: String, archivos: List<File> = emptyList(), grafico: List<Pair<String, Int>>? = null) {
+        mensajes.add(MensajeChatNegocio(texto, esUsuario = false, archivos = archivos, grafico = grafico))
+    }
+
+    fun enviar(texto: String) {
+        val pregunta = texto.trim()
+        val motor = chat ?: return
+        if (pregunta.isEmpty() || ocupado) return
+        mensajes.add(MensajeChatNegocio(pregunta, esUsuario = true))
+        viewModelScope.launch {
+            ocupado = true
+            try {
+                val respuesta = motor.procesar(pregunta)
+                if (respuesta != null) {
+                    bot(respuesta.texto, archivos = respuesta.archivos)
+                } else {
+                    bot(motor.preguntarIA(pregunta))
+                }
+            } catch (e: Exception) {
+                bot("Ocurrió un error: ${e.message}")
+            } finally {
+                ocupado = false
+            }
+        }
+    }
+
+    fun generarReporte(onListo: (ReporteGenerado) -> Unit) {
+        val motor = chat ?: return
+        if (ocupado) return
+        mensajes.add(MensajeChatNegocio("Generar reporte", esUsuario = true))
+        viewModelScope.launch {
+            ocupado = true
+            motor.reporteDelMes().fold(
+                onSuccess = { reporte ->
+                    if (reporte == null) {
+                        bot("Aún no tienes ventas este mes. Escribe «registrar venta» para empezar.")
+                    } else {
+                        bot(reporte.contenido)
+                        onListo(
+                            ReporteGenerado(
+                                id = 0,
+                                titulo = reporte.titulo,
+                                fecha = LocalDateTime.now().format(formatoFecha),
+                                contenido = reporte.contenido
+                            )
+                        )
+                    }
                 },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandido) },
-                // Si tu versión de material3 es anterior a 1.3 usa: Modifier.menuAnchor()
-                modifier = Modifier
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = KronoColors.Campo,
-                    unfocusedContainerColor = KronoColors.Campo,
-                    focusedBorderColor = KronoColors.Azul,
-                    unfocusedBorderColor = KronoColors.Borde
+                onFailure = { bot(it.message ?: "No pude generar el reporte.") }
+            )
+            ocupado = false
+        }
+    }
+
+    fun generarGrafico(onListo: (GraficoGenerado) -> Unit) {
+        val motor = chat ?: return
+        if (ocupado) return
+        mensajes.add(MensajeChatNegocio("Generar gráfico", esUsuario = true))
+        viewModelScope.launch {
+            ocupado = true
+            motor.reporteDelMes().fold(
+                onSuccess = { reporte ->
+                    if (reporte == null || reporte.datosGrafico.isEmpty()) {
+                        bot("Aún no tienes ventas este mes para graficar.")
+                    } else {
+                        bot("Unidades vendidas por producto este mes:", grafico = reporte.datosGrafico)
+                        onListo(
+                            GraficoGenerado(
+                                id = 0,
+                                titulo = "Gráfico de ventas - ${reporte.titulo.substringAfter("- ")}",
+                                fecha = LocalDateTime.now().format(formatoFecha),
+                                datos = reporte.datosGrafico
+                            )
+                        )
+                    }
+                },
+                onFailure = { bot(it.message ?: "No pude generar el gráfico.") }
+            )
+            ocupado = false
+        }
+    }
+}
+
+@Composable
+fun AsistenteScreen(
+    navController: NavController,
+    negocioData: NegocioData,
+    usuario: AppUser,
+    onReporteGenerado: (ReporteGenerado) -> Unit = {},
+    onGraficoGenerado: (GraficoGenerado) -> Unit = {}
+) {
+    val context = LocalContext.current
+    val vm: AsistenteNegocioViewModel = viewModel(key = usuario.id)
+    val listState = rememberLazyListState()
+    var textoEntrada by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(usuario.id) {
+        vm.iniciar(usuario, negocioData, context) { titulo, contenido, archivos ->
+            onReporteGenerado(
+                ReporteGenerado(
+                    id = 0,
+                    titulo = titulo,
+                    fecha = LocalDateTime.now().format(formatoFecha),
+                    contenido = contenido,
+                    archivos = archivos.map { it.absolutePath }
                 )
             )
+        }
+    }
 
-            ExposedDropdownMenu(
-                expanded = expandido,
-                onDismissRequest = { expandido = false },
-                modifier = Modifier.background(Color.White)
-            ) {
-                Rol.entries.forEach { rol ->
-                    DropdownMenuItem(
-                        text = { Text(rol.etiqueta, color = KronoColors.TextoOscuro) },
-                        onClick = {
-                            onSeleccion(rol)
-                            expandido = false
+    val total = vm.mensajes.size + if (vm.ocupado) 1 else 0
+    LaunchedEffect(total) {
+        if (total > 0) listState.animateScrollToItem(total - 1)
+    }
+
+    val libre = !vm.ocupado
+
+    fun enviar() {
+        if (textoEntrada.isBlank() || !libre) return
+        vm.enviar(textoEntrada)
+        textoEntrada = ""
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(KronoBackground)
+            .imePadding()
+    ) {
+        KronoTopAvatarBar(
+            letraAvatar = "K",
+            onBackClick = {
+                if (!navController.popBackStack()) navController.navigate(Screen.Home.route)
+            },
+            onGearClick = { navController.navigate(Screen.Configuracion.route) }
+        )
+
+        Text(
+            text = "Asistente",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = KronoTextDark,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Text(
+            text = "Krono · registra y analiza las ventas reales de ${negocioData.nombreNegocio}",
+            fontSize = 12.sp,
+            color = KronoTextMuted,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+        )
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(vm.mensajes) { mensaje ->
+                BurbujaChatNegocio(
+                    mensaje = mensaje,
+                    alAbrir = { abrirArchivo(context, it) },
+                    alCompartir = { compartirArchivo(context, it) }
+                )
+            }
+            if (vm.ocupado) {
+                item {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color.White)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text("Krono está trabajando…", fontSize = 12.sp, color = KronoTextMuted)
                         }
+                    }
+                }
+            }
+        }
+
+        // Preguntas que el dueño configuró para este negocio (si hay)
+        if (negocioData.preguntasIA.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 4.dp)
+            ) {
+                items(negocioData.preguntasIA.take(4)) { pregunta ->
+                    AssistChip(
+                        onClick = { if (libre) vm.enviar(pregunta) },
+                        enabled = libre,
+                        label = { Text(pregunta, fontSize = 11.sp) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = AssistChipDefaults.assistChipColors(containerColor = Color.White)
                     )
+                }
+            }
+        }
+
+        // Acciones rápidas
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(vertical = 6.dp)
+        ) {
+            item {
+                ChipAccionNegocio("Registrar venta", Icons.Default.PlaylistAdd, libre) { vm.enviar("registrar venta") }
+            }
+            item {
+                ChipAccionNegocio("Ventas del mes", Icons.Default.Assessment, libre) { vm.enviar("ventas de este mes") }
+            }
+            item {
+                ChipAccionNegocio("Generar reporte", Icons.Default.Assessment, libre) { vm.generarReporte(onReporteGenerado) }
+            }
+            item {
+                ChipAccionNegocio("Generar gráfico", Icons.Default.BarChart, libre) { vm.generarGrafico(onGraficoGenerado) }
+            }
+            item {
+                ChipAccionNegocio("Excel", Icons.Default.TableChart, libre) { vm.enviar("exporta mis ventas de este mes en Excel") }
+            }
+            item {
+                ChipAccionNegocio("PDF", Icons.Default.PictureAsPdf, libre) { vm.enviar("exporta mis ventas de este mes en PDF") }
+            }
+        }
+
+        // Barra para escribir una pregunta libre
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.White)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = textoEntrada,
+                onValueChange = { textoEntrada = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Escríbele a Krono…", fontSize = 13.sp) },
+                singleLine = true,
+                shape = RoundedCornerShape(20.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { enviar() }),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = KronoSurfaceVariant,
+                    focusedContainerColor = Color.White,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedBorderColor = KronoBlue
+                )
+            )
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = { enviar() },
+                enabled = libre && textoEntrada.isNotBlank(),
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (libre && textoEntrada.isNotBlank()) KronoBlue else KronoSurfaceVariant)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Enviar",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChipAccionNegocio(
+    titulo: String,
+    icono: ImageVector,
+    habilitado: Boolean,
+    alPulsar: () -> Unit
+) {
+    AssistChip(
+        onClick = alPulsar,
+        enabled = habilitado,
+        label = { Text(titulo, fontSize = 12.sp) },
+        leadingIcon = { Icon(icono, contentDescription = null, tint = KronoBlue, modifier = Modifier.size(16.dp)) },
+        shape = RoundedCornerShape(12.dp),
+        colors = AssistChipDefaults.assistChipColors(containerColor = Color.White)
+    )
+}
+
+@Composable
+private fun BurbujaChatNegocio(
+    mensaje: MensajeChatNegocio,
+    alAbrir: (File) -> Unit,
+    alCompartir: (File) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (mensaje.esUsuario) Arrangement.End else Arrangement.Start
+    ) {
+        Column(modifier = Modifier.widthIn(max = 300.dp)) {
+            if (!mensaje.esUsuario) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)) {
+                    Icon(Icons.Default.SmartToy, contentDescription = null, tint = KronoBlue, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Krono", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = KronoTextMuted)
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = if (mensaje.esUsuario) 16.dp else 4.dp,
+                            bottomEnd = if (mensaje.esUsuario) 4.dp else 16.dp
+                        )
+                    )
+                    .background(if (mensaje.esUsuario) KronoBlue else Color(0xFFF0F3F6))
+                    .padding(12.dp)
+            ) {
+                Column {
+                    Text(
+                        text = mensaje.texto,
+                        fontSize = 13.sp,
+                        color = if (mensaje.esUsuario) Color.White else KronoTextDark
+                    )
+                    mensaje.grafico?.let { datos ->
+                        Spacer(Modifier.height(10.dp))
+                        MiniBarChart(datos = datos, altura = 110)
+                    }
+                    mensaje.archivos.forEach { archivo ->
+                        val tipo = if (archivo.extension.equals("pdf", ignoreCase = true)) "PDF" else "Excel"
+                        Row {
+                            TextButton(onClick = { alAbrir(archivo) }) { Text("Abrir $tipo") }
+                            TextButton(onClick = { alCompartir(archivo) }) { Text("Compartir") }
+                        }
+                    }
                 }
             }
         }

@@ -5,12 +5,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val localProperties = Properties()
-val localPropertiesFile = rootProject.file("local.properties")
-if (localPropertiesFile.exists()) {
-    localPropertiesFile.inputStream().use { localProperties.load(it) }
+// La API key de Groq se lee de local.properties (nunca se sube al repo).
+// Agrega esta linea a tu local.properties: GROQ_API_KEY=gsk_tu_clave_aqui
+val localProperties = Properties().apply {
+    val archivo = rootProject.file("local.properties")
+    if (archivo.exists()) archivo.inputStream().use { load(it) }
 }
-val groqApiKey = localProperties.getProperty("GROQ_API_KEY") ?: System.getenv("GROQ_API_KEY") ?: ""
+val groqApiKey: String = localProperties.getProperty("GROQ_API_KEY")
+    ?: System.getenv("GROQ_API_KEY")
+    ?: ""
 
 android {
     namespace = "com.example.krono_corp"
@@ -28,7 +31,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
     }
 
@@ -58,7 +60,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.navigation.compose)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -67,7 +68,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("io.appwrite:sdk-for-android:13.0.0")
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.io.appwrite.sdk)
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1")
 }

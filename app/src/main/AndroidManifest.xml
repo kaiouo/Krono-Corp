@@ -24,6 +24,15 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Enlaces de los correos de Appwrite: recuperar contraseña y verificar el email -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="kronocorp" android:host="recovery" />
+                <data android:scheme="kronocorp" android:host="verify" />
+            </intent-filter>
         </activity>
 
         <provider

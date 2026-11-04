@@ -1,5 +1,7 @@
 package com.example.krono_corp
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,8 +20,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.krono_corp.Admin.AdminScreen
+import com.example.krono_corp.Login.ForgotPasswordScreen
 import com.example.krono_corp.Login.LoginScreen
 import com.example.krono_corp.Login.RegisterScreen
+import com.example.krono_corp.Login.ResetPasswordScreen
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AppwriteClient
 import com.example.krono_corp.data.AuthRepository
@@ -34,6 +38,7 @@ import com.example.krono_corp.negocio.GraficoGenerado
 import com.example.krono_corp.negocio.HistorialGraficosScreen
 import com.example.krono_corp.negocio.HistorialReportesScreen
 import com.example.krono_corp.negocio.HomeScreen
+import com.example.krono_corp.negocio.MetricasScreen
 import com.example.krono_corp.negocio.MiNegocioScreen
 import com.example.krono_corp.negocio.NegocioData
 import com.example.krono_corp.negocio.NuevaCuentaAdminScreen
@@ -43,27 +48,42 @@ import com.example.krono_corp.negocio.SucursalesScreen
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    // Enlace de Appwrite (recuperar contraseña / verificar correo) que abrió la app.
+    // Es var de la Activity (no solo de la Composable) para que onNewIntent lo pueda actualizar
+    // aunque la app ya esté abierta cuando el usuario toca el enlace del correo.
+    private var deepLink by mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         // Appwrite se inicializa antes de dibujar cualquier pantalla
         AppwriteClient.init(applicationContext)
+        deepLink = intent?.data
 
         setContent {
             MaterialTheme {
-                KronoApp()
+                KronoApp(deepLink = deepLink, alConsumirDeepLink = { deepLink = null })
             }
         }
     }
+
+    // Se llama cuando el usuario toca el enlace del correo con la app ya abierta
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        deepLink = intent.data
+    }
 }
 
-private enum class Pantalla { CARGANDO, LOGIN, REGISTRO, SESION }
+private enum class Pantalla { CARGANDO, LOGIN, REGISTRO, OLVIDE_CONTRASENA, RESTABLECER_CONTRASENA, SESION }
 
 @Composable
-fun KronoApp() {
+fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.CARGANDO) }
     var usuario by remember { mutableStateOf<AppUser?>(null) }
+    var recuperacion by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // Al abrir la app (o rotar la pantalla) recupera la sesión guardada en Appwrite
@@ -75,6 +95,33 @@ fun KronoApp() {
             usuario = u
             pantalla = if (u != null) Pantalla.SESION else Pantalla.LOGIN
         }
+    }
+
+    // Enlace del correo de Appwrite: kronocorp://recovery?userId=..&secret=.. o kronocorp://verify?...
+    LaunchedEffect(deepLink) {
+        val uri = deepLink ?: return@LaunchedEffect
+        val userId = uri.getQueryParameter("userId")
+        val secret = uri.getQueryParameter("secret")
+        if (!userId.isNullOrBlank() && !secret.isNullOrBlank()) {
+            when (uri.host) {
+                "recovery" -> {
+                    recuperacion = userId to secret
+                    pantalla = Pantalla.RESTABLECER_CONTRASENA
+                }
+                "verify" -> {
+                    AuthRepository.confirmarVerificacion(userId, secret).fold(
+                        onSuccess = {
+                            Toast.makeText(context, "Correo verificado ✅", Toast.LENGTH_LONG).show()
+                            usuario?.let { usuario = it.copy(emailVerificado = true) }
+                        },
+                        onFailure = {
+                            Toast.makeText(context, it.message ?: "No se pudo verificar el correo.", Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            }
+        }
+        alConsumirDeepLink()
     }
 
     fun entrar(u: AppUser) {
@@ -95,13 +142,30 @@ fun KronoApp() {
 
         Pantalla.LOGIN -> LoginScreen(
             onLoginSuccess = { entrar(it) },
-            onGoToRegister = { pantalla = Pantalla.REGISTRO }
+            onGoToRegister = { pantalla = Pantalla.REGISTRO },
+            onForgotPassword = { pantalla = Pantalla.OLVIDE_CONTRASENA }
         )
 
         Pantalla.REGISTRO -> RegisterScreen(
             onRegisterSuccess = { entrar(it) },
             onGoToLogin = { pantalla = Pantalla.LOGIN }
         )
+
+        Pantalla.OLVIDE_CONTRASENA -> ForgotPasswordScreen(
+            onVolverLogin = { pantalla = Pantalla.LOGIN }
+        )
+
+        Pantalla.RESTABLECER_CONTRASENA -> recuperacion?.let { (userId, secret) ->
+            ResetPasswordScreen(
+                userId = userId,
+                secret = secret,
+                onListo = {
+                    recuperacion = null
+                    Toast.makeText(context, "Contraseña actualizada. Inicia sesión.", Toast.LENGTH_LONG).show()
+                    pantalla = Pantalla.LOGIN
+                }
+            )
+        } ?: run { pantalla = Pantalla.LOGIN }
 
         Pantalla.SESION -> usuario?.let { u ->
             when (u.role) {
@@ -259,8 +323,15 @@ private fun NegocioNavHost(
             SucursalesScreen(
                 navController = navController,
                 negocioData = negocio,
-                negocioId = usuario.id
+                negocioId = usuario.id,
+                // Item 9: solo el dueño del negocio agrega/edita/elimina sucursales;
+                // el supervisor solo puede verlas.
+                puedeEditar = usuario.role == Rol.DUENO
             )
+        }
+
+        composable(Screen.Metricas.route) {
+            MetricasScreen(navController = navController, negocioData = negocio, usuario = usuario)
         }
 
         composable(Screen.Configuracion.route) {

@@ -1,5 +1,6 @@
 package com.example.krono_corp.negocio
 
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,12 +13,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -25,15 +25,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import com.example.krono_corp.data.AuthRepository
+import kotlinx.coroutines.launch
 
 data class ConfigOptionFigma(
     val titulo: String,
-    val icono: ImageVector,
+    val icono: androidx.compose.ui.graphics.vector.ImageVector,
     val iconBgColor: Color,
     val iconColor: Color,
     val isDestructive: Boolean = false,
     val onClick: () -> Unit
 )
+
+// Items 4 y 5: pantalla de Configuración, compartida por DUENO y SUPERVISOR.
+// Antes todas las opciones (menos "Mi Cuenta") eran un Toast que no hacía nada;
+// ahora cada una hace algo real.
+private const val PREFS = "krono_prefs"
 
 @Composable
 fun ConfiguracionScreen(
@@ -42,23 +49,48 @@ fun ConfiguracionScreen(
     onCerrarSesion: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
-    // La lista de opciones se declara fuera de LazyColumn para evitar errores de sintaxis
+    var mostrarCuenta by remember { mutableStateOf(false) }
+    var mostrarNotificaciones by remember { mutableStateOf(false) }
+    var notificaciones by remember { mutableStateOf(prefs.getBoolean("notificaciones", true)) }
+    var enviandoVerificacion by remember { mutableStateOf(false) }
+    var enviandoRecuperacion by remember { mutableStateOf(false) }
+
     val opciones = listOf(
         ConfigOptionFigma("Mi Cuenta", Icons.Outlined.Person, Color(0xFF007AFF), Color.White) {
-            Toast.makeText(context, "Empleado: ${negocioData.propietarioEmail}", Toast.LENGTH_SHORT).show()
+            mostrarCuenta = true
         },
         ConfigOptionFigma("Seguridad y Contraseña", Icons.Outlined.Shield, Color(0xFF27AE60), Color.White) {
-            Toast.makeText(context, "Módulo de Seguridad", Toast.LENGTH_SHORT).show()
+            if (enviandoRecuperacion) return@ConfigOptionFigma
+            scope.launch {
+                enviandoRecuperacion = true
+                AuthRepository.solicitarRecuperacion(negocioData.propietarioEmail).fold(
+                    onSuccess = {
+                        Toast.makeText(
+                            context,
+                            "Te enviamos un correo a ${negocioData.propietarioEmail} para cambiar tu contraseña.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    },
+                    onFailure = { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                )
+                enviandoRecuperacion = false
+            }
         },
         ConfigOptionFigma("Notificaciones", Icons.Outlined.Notifications, Color(0xFFF2994A), Color.White) {
-            Toast.makeText(context, "Notificaciones habilitadas", Toast.LENGTH_SHORT).show()
+            mostrarNotificaciones = true
         },
         ConfigOptionFigma("Idioma", Icons.Outlined.Language, Color(0xFF2D9CDB), Color.White) {
-            Toast.makeText(context, "Español (El Salvador)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Por ahora Krono Corp solo está disponible en Español (El Salvador).", Toast.LENGTH_SHORT).show()
         },
-        ConfigOptionFigma("Configuración Avanzada", Icons.Outlined.Tune, Color(0xFF6E7987), Color.White) {
-            Toast.makeText(context, "Ajustes de sistema", Toast.LENGTH_SHORT).show()
+        ConfigOptionFigma("Reportar un fallo", Icons.Outlined.BugReport, Color(0xFF6E7987), Color.White) {
+            Toast.makeText(
+                context,
+                "Escríbenos a soporte@kronocorp.app contándonos qué pasó. ¡Gracias por avisarnos!",
+                Toast.LENGTH_LONG
+            ).show()
         },
         ConfigOptionFigma(
             "Cerrar Sesión",
@@ -67,10 +99,8 @@ fun ConfiguracionScreen(
             Color(0xFFEB5757),
             isDestructive = true
         ) {
-            navController.navigate(Screen.Home.route) {
-                popUpTo(Screen.Home.route) { inclusive = false }
-                launchSingleTop = true
-            }
+            // Antes esto solo navegaba al Home sin cerrar sesión de verdad.
+            onCerrarSesion()
         }
     )
 
@@ -187,6 +217,73 @@ fun ConfiguracionScreen(
                 Spacer(modifier = Modifier.height(20.dp))
             }
         }
+    }
+
+    if (mostrarCuenta) {
+        AlertDialog(
+            onDismissRequest = { mostrarCuenta = false },
+            title = { Text("Mi Cuenta") },
+            text = {
+                Column {
+                    Text("Correo: ${negocioData.propietarioEmail}")
+                    Spacer(Modifier.height(8.dp))
+                    Text("Negocio: ${negocioData.nombreNegocio}")
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            if (enviandoVerificacion) return@Button
+                            scope.launch {
+                                enviandoVerificacion = true
+                                AuthRepository.enviarVerificacion().fold(
+                                    onSuccess = {
+                                        Toast.makeText(
+                                            context,
+                                            "Te enviamos un correo para verificar tu cuenta.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    },
+                                    onFailure = { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                                )
+                                enviandoVerificacion = false
+                            }
+                        },
+                        enabled = !enviandoVerificacion,
+                        colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
+                    ) {
+                        Text(if (enviandoVerificacion) "Enviando…" else "Verificar mi correo")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { mostrarCuenta = false }) { Text("Cerrar") }
+            }
+        )
+    }
+
+    if (mostrarNotificaciones) {
+        AlertDialog(
+            onDismissRequest = { mostrarNotificaciones = false },
+            title = { Text("Notificaciones") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Avisarme de nuevas ventas y reportes")
+                    Switch(
+                        checked = notificaciones,
+                        onCheckedChange = {
+                            notificaciones = it
+                            prefs.edit().putBoolean("notificaciones", it).apply()
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { mostrarNotificaciones = false }) { Text("Listo") }
+            }
+        )
     }
 }
 

@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -50,7 +51,7 @@ fun KronoBottomBar(
             Triple("Home", Icons.Outlined.Home, Screen.Home.route),
             Triple("AI Chat", Icons.Outlined.ChatBubbleOutline, Screen.Asistente.route),
             Triple("Ops", Icons.Outlined.Settings, Screen.Configuracion.route),
-            Triple("Metrics", Icons.Outlined.TrendingUp, "metrics")
+            Triple("Metrics", Icons.Outlined.TrendingUp, Screen.Metricas.route)
         )
 
         items.forEach { (label, icon, targetRoute) ->
@@ -82,8 +83,12 @@ fun KronoBottomBar(
                                 }
                             }
                         }
-                        "metrics" -> {
-                            Toast.makeText(context, "Módulo de Métricas", Toast.LENGTH_SHORT).show()
+                        Screen.Metricas.route -> {
+                            if (currentRoute != Screen.Metricas.route) {
+                                navController.navigate(Screen.Metricas.route) {
+                                    launchSingleTop = true
+                                }
+                            }
                         }
                     }
                 },
@@ -174,6 +179,48 @@ fun KronoTopAvatarBar(
                 tint = KronoTextMuted,
                 modifier = Modifier.size(20.dp)
             )
+        }
+    }
+}
+// Grafico de barras simple, reutilizado por el historial de graficos y por los asistentes
+// (negocio y gerente) para mostrar datos reales sin depender de una libreria de graficos.
+@Composable
+fun MiniBarChart(
+    datos: List<Pair<String, Int>>,
+    modifier: Modifier = Modifier,
+    altura: Int = 90
+) {
+    val maximo = (datos.maxOfOrNull { it.second } ?: 1).coerceAtLeast(1)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height((altura + 36).dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        datos.forEach { (etiqueta, valor) ->
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Text(valor.toString(), fontSize = 10.sp, color = KronoTextMuted)
+                Spacer(Modifier.height(3.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.55f)
+                        .height((altura * valor / maximo).coerceAtLeast(4).dp)
+                        .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                        .background(KronoBlue)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    etiqueta,
+                    fontSize = 10.sp,
+                    color = KronoTextDark,
+                    maxLines = 1
+                )
+            }
         }
     }
 }
