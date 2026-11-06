@@ -27,7 +27,8 @@ import com.example.krono_corp.components.AdminBottomBar
 import kotlinx.coroutines.launch
 import com.example.krono_corp.components.AdminRoutes
 import com.example.krono_corp.data.AppUser
-
+import androidx.compose.material.icons.filled.Store
+import androidx.compose.material.icons.filled.Domain
 import androidx.compose.runtime.mutableStateListOf
 
 
@@ -43,6 +44,12 @@ private val Evaluacion = AdminRoutes.EVALUACION
 private val NuevoAdmin = AdminRoutes.NUEVO_ADMIN
 private val Historial = AdminRoutes.HISTORIAL
 private val Asistente = AdminRoutes.ASISTENTE
+
+private val MiNegocio = AdminRoutes.MI_NEGOCIO
+
+private val Sucursales = AdminRoutes.SUCURSALES
+
+
 
 // PANTALLA PRINCIPAL Y NAVEGACIÓN
 
@@ -178,7 +185,10 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
                     Panel -> PanelControl(
                         abrirPantalla = { pantalla = it }
                     )
-
+                    MiNegocio -> MiNegocioGerenteScreen(
+                        usuario = usuario,
+                        alVolver = { pantalla = Panel }
+                    )
                     Asistente -> AsistenteIAScreen(usuario)
 
                     Evaluacion -> EvaluacionScreen(usuario)
@@ -187,6 +197,7 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
 
                     Historial -> HistorialReportesScreen(usuario)
 
+                   // Sucursales -> SucursalesScreen(usuario)
                     // AdminRoutes.VENTAS -> ReportesVentasScreen()
                 }
             }
@@ -270,6 +281,34 @@ private fun PanelControl(
                 abrirPantalla(NuevoAdmin)
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        // TERCERA FILA
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+
+            TarjetaAdmin(
+                titulo = "Mi negocio",
+                icono = Icons.Default.Store,
+                colorIcono = Color(0xFF3984F5),
+                modifier = Modifier.weight(1f)
+            ) {
+                abrirPantalla(MiNegocio)
+            }
+
+            TarjetaAdmin(
+                titulo = "Sucursales",
+                icono = Icons.Default.Domain,
+                colorIcono = Color(0xFF24A779),
+                modifier = Modifier.weight(1f)
+            ) {
+                abrirPantalla(Sucursales)
+            }
+        }
     }
 }
 
@@ -321,3 +360,6 @@ private fun TarjetaAdmin(
         }
     }
 }
+
+
+

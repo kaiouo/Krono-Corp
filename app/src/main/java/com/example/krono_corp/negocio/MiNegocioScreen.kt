@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.krono_corp.data.PreguntaVenta
+import androidx.compose.material.icons.filled.Store
 
 @Composable
 fun MiNegocioScreen(

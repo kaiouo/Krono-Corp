@@ -28,6 +28,10 @@ object AdminRoutes {
     const val ASISTENTE = "Asistente"
 
     const val NUEVO_ADMIN = "Añadir Admin"
+
+    const val MI_NEGOCIO = "Mi negocio"
+
+    const val SUCURSALES = "Sucursales"
 }
 
 private val AzulSeleccion = Color(0xFFD9E4FF)
