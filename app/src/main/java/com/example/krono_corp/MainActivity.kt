@@ -20,6 +20,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.krono_corp.Admin.AdminScreen
+import com.example.krono_corp.Supervisor.SupervisorScreen
 import com.example.krono_corp.Login.ForgotPasswordScreen
 import com.example.krono_corp.Login.LoginScreen
 import com.example.krono_corp.Login.RegisterScreen
@@ -174,9 +175,12 @@ fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
                     usuario = u,
                     alCerrarSesion = { cerrarSesion() }
                 )
-
-                // DUENO y SUPERVISOR -> flujo del negocio (empieza en MiNegocioScreen)
-                Rol.DUENO, Rol.SUPERVISOR -> NegocioNavHost(
+                Rol.SUPERVISOR -> SupervisorScreen(
+                    usuario = u,
+                    alCerrarSesion = { cerrarSesion() }
+                )
+                // DUENO  -> flujo del negocio (empieza en MiNegocioScreen)
+                Rol.DUENO-> NegocioNavHost(
                     usuario = u,
                     alCerrarSesion = { cerrarSesion() }
                 )

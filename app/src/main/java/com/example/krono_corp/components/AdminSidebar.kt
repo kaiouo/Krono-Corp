@@ -31,6 +31,7 @@ object AdminRoutes {
 
     const val MI_NEGOCIO = "Mi negocio"
 
+    //const val HISTORIAL_GRAFICOS = "Historial de gráficos"
     const val SUCURSALES = "Sucursales"
 }
 

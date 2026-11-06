@@ -30,6 +30,12 @@ import com.example.krono_corp.data.AppUser
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Domain
 import androidx.compose.runtime.mutableStateListOf
+import androidx.navigation.compose.rememberNavController
+//import com.example.krono_corp.Supervisor.Sucursal
+import com.example.krono_corp.components.SupervisorRoutes
+import com.example.krono_corp.negocio.HistorialGraficosScreen
+import com.example.krono_corp.negocio.NegocioData
+import com.example.krono_corp.negocio.SucursalesScreen
 
 
 // COLORES DE LA APLICACIÓN
@@ -47,6 +53,7 @@ private val Asistente = AdminRoutes.ASISTENTE
 
 private val MiNegocio = AdminRoutes.MI_NEGOCIO
 
+//private val HistorialGraficos = AdminRoutes.HISTORIAL_GRAFICOS
 private val Sucursales = AdminRoutes.SUCURSALES
 
 
@@ -57,6 +64,13 @@ private val Sucursales = AdminRoutes.SUCURSALES
 fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
 
     var pantalla by remember { mutableStateOf(Panel) }
+    // Controlador de navegación
+    val navController = rememberNavController()
+
+    // Datos compartidos del negocio
+    val negocio = remember(usuario.id) {
+        NegocioData(propietarioEmail = usuario.email)
+    }
 
     val drawerState = rememberDrawerState(
         initialValue = DrawerValue.Closed
@@ -197,8 +211,19 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
 
                     Historial -> HistorialReportesScreen(usuario)
 
-                   // Sucursales -> SucursalesScreen(usuario)
-                    // AdminRoutes.VENTAS -> ReportesVentasScreen()
+                    // MI SUCURSAL
+                    Sucursales -> SucursalesScreen(
+                        navController = navController,
+                        negocioData = negocio,
+                        negocioId = usuario.id,
+                        puedeEditar = false
+                    )
+
+                    // HISTORIAL DE GRÁFICOS
+                   // HistorialGraficos -> HistorialGraficosScreen(
+                     //   navController = navController,
+                       // negocioData = negocio
+                    //)
                 }
             }
         }
