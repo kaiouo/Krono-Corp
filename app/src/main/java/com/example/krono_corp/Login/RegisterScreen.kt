@@ -22,27 +22,41 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.InvitacionRepository
 import com.example.krono_corp.data.Rol
 import kotlinx.coroutines.launch
 
 @Composable
 fun RegisterScreen(
-    onRegisterSuccess: (AppUser) -> Unit,
-    onGoToLogin: () -> Unit
+    // Se llama con el correo registrado; la app muestra "Revisa tu correo"
+    onRegisterSuccess: (correo: String) -> Unit,
+    onGoToLogin: () -> Unit,
+    // Código del enlace de invitación de un gerente (null = registro normal sin enlace)
+    codigoInvitacion: String? = null
 ) {
+    val esInvitacion = !codigoInvitacion.isNullOrBlank()
     var correo by rememberSaveable { mutableStateOf("") }
     var telefono by rememberSaveable { mutableStateOf("") }
-    // El mockup muestra "Supervisor de ventas" preseleccionado
-    var rol by rememberSaveable { mutableStateOf(Rol.SUPERVISOR) }
+    // Registro normal: solo Gerente General o Dueño de Emprendimiento (Supervisor solo por invitación)
+    var rolElegido by rememberSaveable { mutableStateOf(Rol.DUENO) }
+    val rol = if (esInvitacion) Rol.SUPERVISOR else rolElegido
+    val rolesDisponibles = if (esInvitacion) listOf(Rol.SUPERVISOR) else listOf(Rol.GERENTE, Rol.DUENO)
     var clave by rememberSaveable { mutableStateOf("") }
     var confirmar by rememberSaveable { mutableStateOf("") }
     var cargando by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
+    // Si viene de un enlace, avisa de una vez si ya no sirve (vencido o desactivado)
+    LaunchedEffect(codigoInvitacion) {
+        if (!codigoInvitacion.isNullOrBlank()) {
+            InvitacionRepository.validar(codigoInvitacion).onFailure { error = it.message }
+        }
+    }
+
     fun registrar() {
+        if (cargando) return
         error = when {
             correo.isBlank() || telefono.isBlank() || clave.isBlank() || confirmar.isBlank() ->
                 "Completa todos los campos."
@@ -58,8 +72,12 @@ fun RegisterScreen(
             cargando = true
             // Se guarda con el prefijo +503 si el usuario no lo escribió
             val tel = telefono.trim().let { if (it.startsWith("+")) it else "+503 $it" }
-            AuthRepository.register(correo.trim(), tel, clave, rol).fold(
-                onSuccess = { onRegisterSuccess(it) },
+            val correoLimpio = correo.trim()
+            AuthRepository.register(
+                correoLimpio, tel, clave, rol,
+                codigoInvitacion?.takeIf { it.isNotBlank() }
+            ).fold(
+                onSuccess = { onRegisterSuccess(correoLimpio) },
                 onFailure = { error = it.message }
             )
             cargando = false
@@ -97,6 +115,24 @@ fun RegisterScreen(
             color = KronoColors.TextoSuave
         )
 
+        if (esInvitacion) {
+            Spacer(Modifier.height(16.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(KronoColors.AzulClaro)
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "Te invitaron a unirte a un equipo como Supervisor de Ventas. " +
+                            "Completa tus datos para registrarte.",
+                    fontSize = 13.sp,
+                    color = KronoColors.Azul
+                )
+            }
+        }
+
         Spacer(Modifier.height(20.dp))
         AuthTextField(
             label = "Correo Gmail",
@@ -121,7 +157,9 @@ fun RegisterScreen(
         RoleDropdown(
             label = "Roles",
             seleccionado = rol,
-            onSeleccion = { rol = it }
+            onSeleccion = { rolElegido = it },
+            roles = rolesDisponibles,
+            bloqueado = esInvitacion
         )
 
         Spacer(Modifier.height(14.dp))

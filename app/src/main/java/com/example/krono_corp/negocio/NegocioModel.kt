@@ -13,7 +13,7 @@ sealed class Screen(val route: String) {
     object Asistente : Screen("asistente")
     object HistorialReportes : Screen("historial_reportes")
     object HistorialGraficos : Screen("historial_graficos")
-    object NuevaCuentaAdmin : Screen("nueva_cuenta_admin")
+    //object NuevaCuentaAdmin : Screen("nueva_cuenta_admin")
 }
 
 data class SucursalItem(
@@ -30,7 +30,11 @@ data class ReporteGenerado(
     val titulo: String,
     val fecha: String,
     val contenido: String,
-    val archivos: List<String> = emptyList()
+    // Rutas locales de los archivos recién generados en esta sesión
+    val archivos: List<String> = emptyList(),
+    // Archivos ya guardados en el bucket de Appwrite (mismo orden que los nombres)
+    val archivoIds: List<String> = emptyList(),
+    val archivoNombres: List<String> = emptyList()
 )
 
 data class GraficoGenerado(

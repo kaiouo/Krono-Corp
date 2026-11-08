@@ -15,17 +15,32 @@ data class AppUser(
     val email: String,
     val phone: String,
     val role: Rol,
-    val emailVerificado: Boolean = false
+    val emailVerificado: Boolean = false,
+    val sucursal: String = "",   // ID de la sucursal asignada (solo supervisores)
+    val gerenteId: String = ""   // gerente al que pertenece (solo supervisores)
+)
+
+/** Datos para completar el segundo paso del login (código enviado por correo). */
+data class DesafioLogin(
+    val userId: String,
+    val email: String
 )
 
 /**
  * Autenticación -> Appwrite Auth (correo + contraseña, la contraseña se guarda cifrada).
  * Perfil (alias, email, phoneNumber, role) -> tabla "usuarios".
  * El ID de la fila es el MISMO ID de la cuenta, así el login encuentra su perfil directamente.
+ *
+ * Registro: crea cuenta + perfil, envía el enlace de verificación y deja la sesión cerrada.
+ * Login en 2 pasos: (1) correo + contraseña + correo verificado, (2) código de 6 dígitos por correo.
  */
 object AuthRepository {
 
     private const val TAG = "KronoAuth"
+
+    // Página puente (Netlify). "?tipo=verify" le indica que abra kronocorp://verify
+    private const val URL_RECUPERACION = "https://kronocorpfp.netlify.app/"
+    private const val URL_VERIFICACION = "https://kronocorpfp.netlify.app/?tipo=verify"
 
     private val account get() = AppwriteClient.account
     private val tablesDB get() = AppwriteClient.tablesDB
@@ -39,13 +54,43 @@ object AuthRepository {
         null
     }
 
+    // ---------- Registro ----------
+
+    /**
+     * Crea la cuenta y el perfil, y envía el correo de verificación.
+     * Al terminar NO deja sesión iniciada: la persona debe verificar su correo e iniciar sesión.
+     *
+     * codigoInvitacion: viene del enlace que genera un gerente. Con un código válido el rol
+     * SIEMPRE es Supervisor y la cuenta queda marcada con "invitadoPor" = id del gerente.
+     * Sin código no se permite registrarse como Supervisor.
+     */
     suspend fun register(
         email: String,
         phone: String,
         password: String,
-        rol: Rol
-    ): Result<AppUser> = safe {
+        rol: Rol,
+        codigoInvitacion: String? = null
+    ): Result<Unit> = safe {
         val alias = email.substringBefore("@")
+
+        // 0) Si el registro viene de un enlace, se valida ANTES de crear la cuenta
+        closeSessionQuietly()
+        val invitadoPor: String? = codigoInvitacion
+            ?.takeIf { it.isNotBlank() }
+            ?.let { InvitacionRepository.gerenteDe(it) }
+        if (invitadoPor == null && rol == Rol.SUPERVISOR) {
+            throw IllegalStateException(
+                "Para registrarte como Supervisor necesitas el enlace de invitación de tu gerente."
+            )
+        }
+        val rolFinal = if (invitadoPor != null) Rol.SUPERVISOR else rol
+        val datosPerfil = mutableMapOf<String, Any>(
+            "alias" to alias,
+            "email" to email,
+            "phoneNumber" to phone,
+            "role" to rolFinal.codigo
+        )
+        if (invitadoPor != null) datosPerfil["invitadoPor"] = invitadoPor
 
         // 1) Cuenta en Appwrite Auth
         val cuenta = account.create(
@@ -56,7 +101,7 @@ object AuthRepository {
         )
         Log.i(TAG, "REGISTRO paso 1 OK: cuenta creada ${cuenta.id}")
 
-        // 2) Sesión (necesaria para tener permiso de escribir en la tabla)
+        // 2) Sesión temporal (necesaria para escribir en la tabla y pedir la verificación)
         closeSessionQuietly()
         val sesion = account.createEmailPasswordSession(email = email, password = password)
         Log.i(TAG, "REGISTRO paso 2 OK: sesión creada ${sesion.id}")
@@ -67,12 +112,7 @@ object AuthRepository {
                 databaseId = AppwriteClient.DATABASE_ID,
                 tableId = AppwriteClient.TABLE_ID,
                 rowId = cuenta.id,
-                data = mapOf(
-                    "alias" to alias,
-                    "email" to email,
-                    "phoneNumber" to phone,
-                    "role" to rol.codigo
-                ),
+                data = datosPerfil,
                 // Solo el dueño de la fila puede leerla y editarla
                 permissions = listOf(
                     Permission.read(Role.user(cuenta.id)),
@@ -85,13 +125,65 @@ object AuthRepository {
             throw e
         }
 
-        AppUser(id = cuenta.id, alias = alias, email = email, phone = phone, role = rol)
+        // 4) Correo de verificación. Si falla no se cancela el registro:
+        //    al intentar iniciar sesión sin verificar, se reenvía automáticamente.
+        try {
+            account.createEmailVerification(url = URL_VERIFICACION)
+            Log.i(TAG, "REGISTRO paso 4 OK: correo de verificación enviado")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "REGISTRO paso 4: no se pudo enviar la verificación: ${e.message}")
+        }
+
+        // 5) Se cierra la sesión: hasta verificar el correo y poner el código no hay acceso
+        closeSessionQuietly()
     }
 
-    suspend fun login(email: String, password: String): Result<AppUser> = safe {
+    // ---------- Inicio de sesión en 2 pasos ----------
+
+    /**
+     * Paso 1: valida correo + contraseña y que el correo esté verificado.
+     * Si todo está bien cierra la sesión temporal y envía el código de 6 dígitos al correo.
+     */
+    suspend fun iniciarLogin(email: String, password: String): Result<DesafioLogin> = safe {
         closeSessionQuietly() // evita el error "ya existe una sesión activa"
-        val sesion = account.createEmailPasswordSession(email = email, password = password)
-        Log.i(TAG, "LOGIN paso 1 OK: sesión creada ${sesion.id}")
+
+        // Si la contraseña es incorrecta, aquí lanza user_invalid_credentials
+        account.createEmailPasswordSession(email = email, password = password)
+        val cuenta = account.get()
+        Log.i(TAG, "LOGIN paso 1 OK: credenciales correctas ${cuenta.id}")
+
+        if (!cuenta.emailVerification) {
+            // Reenvía el enlace usando esta sesión temporal y no deja entrar
+            try {
+                account.createEmailVerification(url = URL_VERIFICACION)
+                Log.i(TAG, "LOGIN: correo no verificado, se reenvió el enlace")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "LOGIN: no se pudo reenviar la verificación: ${e.message}")
+            }
+            closeSessionQuietly()
+            throw IllegalStateException(
+                "Tu correo aún no está verificado. Te reenviamos el enlace de verificación; " +
+                        "ábrelo desde tu correo y luego inicia sesión."
+            )
+        }
+
+        // Credenciales correctas y correo verificado: se cierra la sesión y se pide el código
+        closeSessionQuietly()
+        account.createEmailToken(userId = cuenta.id, email = cuenta.email)
+        Log.i(TAG, "LOGIN paso 2 OK: código enviado a ${cuenta.email}")
+
+        DesafioLogin(userId = cuenta.id, email = cuenta.email)
+    }
+
+    /** Paso 2: canjea el código de 6 dígitos por la sesión real y carga el perfil. */
+    suspend fun confirmarCodigo(userId: String, codigo: String): Result<AppUser> = safe {
+        closeSessionQuietly()
+        account.createSession(userId = userId, secret = codigo.trim())
+        Log.i(TAG, "LOGIN paso 3 OK: código correcto, sesión creada")
         try {
             perfilDe(account.get())
         } catch (e: AppwriteException) {
@@ -106,6 +198,12 @@ object AuthRepository {
         }
     }
 
+    /** Envía un código nuevo (el anterior deja de servir). */
+    suspend fun reenviarCodigo(userId: String, email: String): Result<Unit> = safe {
+        account.createEmailToken(userId = userId, email = email)
+        Unit
+    }
+
     suspend fun logout() {
         closeSessionQuietly()
     }
@@ -114,7 +212,7 @@ object AuthRepository {
 
     /** Envía el correo de recuperación. El enlace abre la app directo (deep link). */
     suspend fun solicitarRecuperacion(email: String): Result<Unit> = safe {
-        account.createRecovery(email = email, url = "kronocorp://recovery")
+        account.createRecovery(email = email, url = URL_RECUPERACION)
         Unit
     }
 
@@ -128,7 +226,7 @@ object AuthRepository {
 
     /** Envía el correo de verificación a la cuenta con sesión activa. */
     suspend fun enviarVerificacion(): Result<Unit> = safe {
-        account.createEmailVerification(url = "kronocorp://verify")
+        account.createEmailVerification(url = URL_VERIFICACION)
         Unit
     }
 
@@ -153,7 +251,9 @@ object AuthRepository {
             email = d["email"] as? String ?: cuenta.email,
             phone = d["phoneNumber"] as? String ?: "",
             role = Rol.desdeCodigo(d["role"] as? String),
-            emailVerificado = cuenta.emailVerification
+            emailVerificado = cuenta.emailVerification,
+            sucursal = d["sucursal"] as? String ?: "",
+            gerenteId = d["gerenteId"] as? String ?: ""
         )
     }
 
@@ -190,6 +290,7 @@ object AuthRepository {
             "user_already_exists", "user_email_already_exists" ->
                 "Este correo ya está registrado. Inicia sesión."
             "user_invalid_credentials" -> "Correo o contraseña incorrectos."
+            "user_invalid_token" -> "El código es incorrecto o ya venció."
             "general_rate_limit_exceeded" -> "Demasiados intentos. Espera un momento."
             "user_unauthorized" ->
                 "Sin permisos en la tabla usuarios. Revisa Settings > Permissions en Appwrite."

@@ -26,14 +26,20 @@ import androidx.navigation.compose.rememberNavController
 @Composable
 fun HistorialGraficosScreen(
     navController: NavController,
-    negocioData: NegocioData
+    negocioData: NegocioData,
+    // false = pantalla embebida (SUPERVISOR): sin flecha, avatar, ajustes ni barra inferior Krono
+    mostrarBarras: Boolean = true,
+    // Si se indica, el botón "Ir al Asistente" usa esto en vez del NavController
+    alIrAlAsistente: (() -> Unit)? = null
 ) {
     var seleccionado by remember { mutableStateOf<GraficoGenerado?>(null) }
 
     Scaffold(
         containerColor = Color.White,
         bottomBar = {
-            KronoBottomBar(navController = navController, currentRoute = Screen.HistorialGraficos.route)
+            if (mostrarBarras) {
+                KronoBottomBar(navController = navController, currentRoute = Screen.HistorialGraficos.route)
+            }
         }
     ) { paddingValues ->
         LazyColumn(
@@ -43,15 +49,19 @@ fun HistorialGraficosScreen(
                 .padding(horizontal = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item {
-                Spacer(Modifier.height(8.dp))
-                KronoTopAvatarBar(
-                    letraAvatar = "📊",
-                    onBackClick = {
-                        if (!navController.popBackStack()) navController.navigate(Screen.Home.route)
-                    },
-                    onGearClick = { navController.navigate(Screen.Configuracion.route) }
-                )
+            if (mostrarBarras) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    KronoTopAvatarBar(
+                        letraAvatar = "📊",
+                        onBackClick = {
+                            if (!navController.popBackStack()) navController.navigate(Screen.Home.route)
+                        },
+                        onGearClick = { navController.navigate(Screen.Configuracion.route) }
+                    )
+                }
+            } else {
+                item { Spacer(Modifier.height(8.dp)) }
             }
 
             item {
@@ -75,7 +85,10 @@ fun HistorialGraficosScreen(
                 item {
                     EstadoVacioHistorial(
                         mensaje = "Aún no has generado ningún gráfico.",
-                        onIrAlAsistente = { navController.navigate(Screen.Asistente.route) }
+                        onIrAlAsistente = {
+                            if (alIrAlAsistente != null) alIrAlAsistente()
+                            else navController.navigate(Screen.Asistente.route)
+                        }
                     )
                 }
             }

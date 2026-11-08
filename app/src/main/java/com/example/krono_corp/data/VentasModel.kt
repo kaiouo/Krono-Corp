@@ -40,16 +40,17 @@ data class PreguntaVenta(
             PreguntaVenta(NOTA, "¿Quieres agregar una nota? (escribe «no» para omitir)")
         )
 
-        /** Asegura que estén todas las preguntas base (por si el JSON guardado quedó incompleto). */
+        /** Solo garantiza las 3 obligatorias; lo demás queda como lo dejó el gerente. */
         fun normalizar(guardadas: List<PreguntaVenta>): List<PreguntaVenta> {
             val resultado = guardadas.toMutableList()
-            porDefecto().forEachIndexed { i, base ->
+            porDefecto().filter { it.id in OBLIGATORIAS }.forEachIndexed { i, base ->
                 if (resultado.none { it.id == base.id }) {
                     resultado.add(i.coerceAtMost(resultado.size), base)
                 }
             }
             return resultado.map {
-                if (it.id in OBLIGATORIAS) it.copy(activa = true, obligatoria = true) else it
+                if (it.id in OBLIGATORIAS) it.copy(activa = true, obligatoria = true)
+                else it.copy(activa = true)
             }
         }
 

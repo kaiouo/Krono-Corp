@@ -2,461 +2,288 @@ package com.example.krono_corp.negocio
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import androidx.navigation.compose.rememberNavController
 import com.example.krono_corp.data.PreguntaVenta
-import androidx.compose.material.icons.filled.Store
+import kotlinx.coroutines.launch
 
 @Composable
 fun MiNegocioScreen(
     navController: NavController,
     negocioData: NegocioData,
     onGuardarCambios: (String, List<String>) -> Unit = { _, _ -> },
-    onGuardarPreguntasVenta: (List<PreguntaVenta>) -> Unit = {}
+    onGuardarPreguntasVenta: (List<PreguntaVenta>) -> Unit = {},
+    mostrarBarra: Boolean = true   // false = sin la barra Home / AI Chat / Ops / Metrics
 ) {
     var nombreNegocio by remember { mutableStateOf(negocioData.nombreNegocio) }
-    val preguntas = remember { mutableStateListOf(*negocioData.preguntasIA.toTypedArray()) }
-    var nuevaPreguntaTexto by remember { mutableStateOf("") }
-
-    // Estados para editar pregunta existente
-    var mostrarDialogoEditar by remember { mutableStateOf(false) }
-    var textoPreguntaEditando by remember { mutableStateOf("") }
-    var indiceEditando by remember { mutableStateOf<Int?>(null) }
-
-    // Preguntas que la IA hace al registrar una venta
+    val preguntasIA = remember { mutableStateListOf(*negocioData.preguntasIA.toTypedArray()) }
     val preguntasVenta = remember { mutableStateListOf(*negocioData.preguntasVenta.toTypedArray()) }
+    var nuevaPreguntaIA by remember { mutableStateOf("") }
     var nuevaPreguntaVenta by remember { mutableStateOf("") }
-    var ventaIndiceEditando by remember { mutableStateOf<Int?>(null) }
-    var textoVentaEditando by remember { mutableStateOf("") }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
-        containerColor = Color.White,
+        containerColor = KronoBackground,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            KronoBottomBar(navController = navController, currentRoute = Screen.MiNegocio.route)
+            if (mostrarBarra) {
+                KronoBottomBar(navController = navController, currentRoute = Screen.MiNegocio.route)
+            }
         }
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 24.dp),
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Spacer(modifier = Modifier.height(8.dp))
-                KronoTopAvatarBar(
-                    letraAvatar = "I",
-                    onBackClick = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.Home.route)
-                        }
-                    },
-                    onGearClick = { navController.navigate(Screen.Configuracion.route) }
-                )
-            }
-
-            // Título
-            item {
-                Row(verticalAlignment = Alignment.Bottom) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Store,
+                        contentDescription = null,
+                        tint = KronoBlue,
+                        modifier = Modifier.size(32.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "Mi Negocio",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.ExtraBold,
+                        text = "Configuración del Negocio",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
                         color = KronoTextDark
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Headline",
-                        fontSize = 13.sp,
-                        color = KronoTextMuted,
-                        modifier = Modifier.padding(bottom = 2.dp)
-                    )
                 }
             }
 
-            // Campo Nombre de Negocio
+            // ---------------- Nombre del negocio ----------------
             item {
-                Text(
-                    text = "NOMBRE DEL NEGOCIO",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = KronoTextMuted
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = nombreNegocio,
-                    onValueChange = { nombreNegocio = it },
-                    placeholder = { Text("ej. Panadería Central", color = KronoTextMuted) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = Color(0xFFE2E8F0),
-                        focusedBorderColor = KronoBlue,
-                        unfocusedContainerColor = KronoSurfaceVariant,
-                        focusedContainerColor = Color.White
-                    ),
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = KronoCardBg),
+                    elevation = CardDefaults.cardElevation(2.dp),
                     modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            // Encabezado preguntas
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "CONFIGURACIÓN DE PREGUNTAS PARA LA IA",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = KronoTextMuted
-                )
-            }
-
-            // Lista de preguntas
-            itemsIndexed(preguntas) { index, itemPregunta ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "${index + 1}. $itemPregunta",
-                            fontSize = 13.sp,
-                            color = KronoTextDark,
-                            modifier = Modifier.weight(1f)
+                            text = "Información General",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KronoTextDark
                         )
-                        IconButton(
-                            onClick = {
-                                textoPreguntaEditando = itemPregunta
-                                indiceEditando = index
-                                mostrarDialogoEditar = true
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Editar",
-                                tint = KronoBlue,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(onClick = { preguntas.removeAt(index) }) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = "Eliminar",
-                                tint = Color(0xFFEB5757),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = nombreNegocio,
+                            onValueChange = { nombreNegocio = it },
+                            label = { Text("Nombre del Negocio") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
 
-            // Input para nueva pregunta
+            // ---------------- SECCIÓN 1: preguntas para la IA del gerente ----------------
             item {
-                Text(
-                    text = "Pregunta ${preguntas.size + 1} (vacía para agregar nueva)",
-                    fontSize = 12.sp,
-                    color = KronoTextMuted
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = nuevaPreguntaTexto,
-                        onValueChange = { nuevaPreguntaTexto = it },
-                        placeholder = { Text("Ingresa otra pregunta...", fontSize = 13.sp, color = KronoTextMuted) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = Color(0xFFE2E8F0),
-                            focusedBorderColor = KronoBlue,
-                            unfocusedContainerColor = KronoSurfaceVariant,
-                            focusedContainerColor = Color.White
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (nuevaPreguntaTexto.trim().isNotEmpty()) {
-                                preguntas.add(nuevaPreguntaTexto.trim())
-                                nuevaPreguntaTexto = ""
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFE8F1FF),
-                            contentColor = KronoBlue
-                        ),
-                        modifier = Modifier.height(52.dp)
-                    ) {
-                        Text("Agregar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-                }
-            }
-
-            // Preguntas que la IA hace al registrar una venta
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "PREGUNTAS AL REGISTRAR UNA VENTA",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = KronoTextMuted
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "La IA te hará estas preguntas en este orden. Puedes cambiar el texto, " +
-                            "desactivar las opcionales o agregar las tuyas.",
-                    fontSize = 12.sp,
-                    color = KronoTextMuted
-                )
-            }
-
-            itemsIndexed(preguntasVenta) { index, pv ->
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = KronoCardBg),
+                    elevation = CardDefaults.cardElevation(2.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "${index + 1}. ${pv.texto}",
-                                fontSize = 13.sp,
-                                color = if (pv.activa) KronoTextDark else KronoTextMuted
-                            )
-                            Text(
-                                text = when {
-                                    pv.personalizada -> "Personalizada"
-                                    pv.obligatoria -> "Obligatoria"
-                                    else -> if (pv.activa) "Opcional" else "Opcional (desactivada)"
-                                },
-                                fontSize = 11.sp,
-                                color = KronoTextMuted
-                            )
-                        }
-                        if (!pv.obligatoria) {
-                            Switch(
-                                checked = pv.activa,
-                                onCheckedChange = { preguntasVenta[index] = pv.copy(activa = it) }
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                textoVentaEditando = pv.texto
-                                ventaIndiceEditando = index
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Editar",
-                                tint = KronoBlue,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        if (pv.personalizada) {
-                            IconButton(onClick = { preguntasVenta.removeAt(index) }) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
-                                    contentDescription = "Eliminar",
-                                    tint = Color(0xFFEB5757),
-                                    modifier = Modifier.size(20.dp)
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Preguntas para mi asistente de IA",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KronoTextDark
+                        )
+                        Text(
+                            text = "Sugerencias que tú le puedes hacer a tu asistente.",
+                            fontSize = 12.sp,
+                            color = KronoTextDark.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        preguntasIA.forEachIndexed { index, pregunta ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = pregunta,
+                                    onValueChange = { preguntasIA[index] = it },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
                                 )
+                                IconButton(onClick = { preguntasIA.removeAt(index) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = Color.Red)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = nuevaPreguntaIA,
+                                onValueChange = { nuevaPreguntaIA = it },
+                                label = { Text("Nueva pregunta para mi IA") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            IconButton(onClick = {
+                                if (nuevaPreguntaIA.isNotBlank()) {
+                                    preguntasIA.add(nuevaPreguntaIA.trim())
+                                    nuevaPreguntaIA = ""
+                                }
+                            }) {
+                                Icon(Icons.Default.Add, contentDescription = "Agregar", tint = KronoBlue)
                             }
                         }
                     }
                 }
             }
 
+            // ---------------- SECCIÓN 2: preguntas que verán los supervisores ----------------
             item {
-                Text(
-                    text = "Agregar una pregunta propia para las ventas",
-                    fontSize = 12.sp,
-                    color = KronoTextMuted
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = KronoCardBg),
+                    elevation = CardDefaults.cardElevation(2.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    OutlinedTextField(
-                        value = nuevaPreguntaVenta,
-                        onValueChange = { nuevaPreguntaVenta = it },
-                        placeholder = { Text("ej. ¿Número de factura?", fontSize = 13.sp, color = KronoTextMuted) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = Color(0xFFE2E8F0),
-                            focusedBorderColor = KronoBlue,
-                            unfocusedContainerColor = KronoSurfaceVariant,
-                            focusedContainerColor = Color.White
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (nuevaPreguntaVenta.trim().isNotEmpty()) {
-                                preguntasVenta.add(
-                                    PreguntaVenta(
-                                        id = "CUSTOM-${System.currentTimeMillis()}",
-                                        texto = nuevaPreguntaVenta.trim(),
-                                        personalizada = true
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Preguntas para supervisores",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KronoTextDark
+                        )
+                        Text(
+                            text = "Son las que verán tus supervisores al registrar una venta. " +
+                                    "Solo tú puedes modificarlas.",
+                            fontSize = 12.sp,
+                            color = KronoTextDark.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        preguntasVenta.forEachIndexed { index, p ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = p.texto,
+                                    onValueChange = { nuevo -> preguntasVenta[index] = p.copy(texto = nuevo) },
+                                    modifier = Modifier.weight(1f),
+                                    textStyle = TextStyle(fontSize = 14.sp),
+                                    supportingText = if (p.obligatoria) {
+                                        { Text("Obligatoria: puedes reescribirla, no eliminarla") }
+                                    } else null
+                                )
+                                if (p.obligatoria) {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        contentDescription = "Obligatoria",
+                                        tint = KronoTextDark.copy(alpha = 0.4f),
+                                        modifier = Modifier.padding(horizontal = 12.dp)
                                     )
-                                )
-                                nuevaPreguntaVenta = ""
+                                } else {
+                                    IconButton(onClick = { preguntasVenta.removeAt(index) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = Color.Red)
+                                    }
+                                }
                             }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFE8F1FF),
-                            contentColor = KronoBlue
-                        ),
-                        modifier = Modifier.height(52.dp)
-                    ) {
-                        Text("Agregar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = nuevaPreguntaVenta,
+                                onValueChange = { nuevaPreguntaVenta = it },
+                                label = { Text("Nueva pregunta para supervisores") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            IconButton(onClick = {
+                                if (nuevaPreguntaVenta.isNotBlank()) {
+                                    preguntasVenta.add(
+                                        PreguntaVenta(
+                                            id = "CUSTOM_${System.currentTimeMillis()}",
+                                            texto = nuevaPreguntaVenta.trim(),
+                                            activa = true,
+                                            obligatoria = false,
+                                            personalizada = true
+                                        )
+                                    )
+                                    nuevaPreguntaVenta = ""
+                                }
+                            }) {
+                                Icon(Icons.Default.Add, contentDescription = "Agregar", tint = KronoBlue)
+                            }
+                        }
                     }
-                }
-                TextButton(
-                    onClick = {
-                        preguntasVenta.clear()
-                        preguntasVenta.addAll(PreguntaVenta.porDefecto())
-                    }
-                ) {
-                    Text("Restablecer preguntas de venta", fontSize = 12.sp, color = Color(0xFFEB5757))
                 }
             }
 
-            // Botón Guardar Cambios
+            // ---------------- Guardar ----------------
             item {
-                Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
-                        onGuardarCambios(nombreNegocio, preguntas.toList())
-                        onGuardarPreguntasVenta(preguntasVenta.toList())
-                        navController.popBackStack()
+                        val iaLimpias = preguntasIA.map { it.trim() }.filter { it.isNotEmpty() }
+
+                        val ventaLimpias = preguntasVenta.mapNotNull { p ->
+                            val t = p.texto.trim()
+                            when {
+                                t.isNotEmpty() -> p.copy(texto = t, activa = true)
+                                // una obligatoria vacía vuelve a su texto original
+                                p.obligatoria -> PreguntaVenta.porDefecto().firstOrNull { it.id == p.id }
+                                else -> null
+                            }
+                        }
+
+                        preguntasIA.clear(); preguntasIA.addAll(iaLimpias)
+                        preguntasVenta.clear(); preguntasVenta.addAll(ventaLimpias)
+
+                        onGuardarCambios(nombreNegocio.trim(), iaLimpias)
+                        onGuardarPreguntasVenta(ventaLimpias)
+                        scope.launch { snackbarHostState.showSnackbar("Cambios guardados") }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
-                    shape = RoundedCornerShape(16.dp),
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
                 ) {
-                    Text(
-                        text = "Guardar Cambios",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = Color.White
-                    )
+                    Icon(Icons.Default.Save, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Guardar Cambios", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
-                Spacer(modifier = Modifier.height(20.dp))
             }
         }
-    }
-
-    // Modal para editar el texto de una pregunta de venta
-    ventaIndiceEditando?.let { indice ->
-        AlertDialog(
-            onDismissRequest = { ventaIndiceEditando = null },
-            title = { Text("Editar pregunta de venta", fontWeight = FontWeight.Bold) },
-            text = {
-                OutlinedTextField(
-                    value = textoVentaEditando,
-                    onValueChange = { textoVentaEditando = it },
-                    label = { Text("Pregunta") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (textoVentaEditando.trim().isNotEmpty() && indice in preguntasVenta.indices) {
-                            preguntasVenta[indice] = preguntasVenta[indice].copy(texto = textoVentaEditando.trim())
-                        }
-                        ventaIndiceEditando = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
-                ) { Text("Actualizar") }
-            },
-            dismissButton = {
-                TextButton(onClick = { ventaIndiceEditando = null }) { Text("Cancelar") }
-            }
-        )
-    }
-
-    // Modal para editar la pregunta seleccionada
-    if (mostrarDialogoEditar) {
-        AlertDialog(
-            onDismissRequest = { mostrarDialogoEditar = false },
-            title = { Text("Editar pregunta para la IA", fontWeight = FontWeight.Bold) },
-            text = {
-                OutlinedTextField(
-                    value = textoPreguntaEditando,
-                    onValueChange = { textoPreguntaEditando = it },
-                    label = { Text("Pregunta") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val i = indiceEditando
-                        if (i != null && textoPreguntaEditando.trim().isNotEmpty()) {
-                            preguntas[i] = textoPreguntaEditando.trim()
-                        }
-                        mostrarDialogoEditar = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
-                ) {
-                    Text("Actualizar")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { mostrarDialogoEditar = false }) {
-                    Text("Cancelar")
-                }
-            }
-        )
-    }
-}
-
-@Preview(showBackground = true, showSystemUi = true)
-@Composable
-fun MiNegocioScreenPreview() {
-    MaterialTheme {
-        MiNegocioScreen(
-            navController = rememberNavController(),
-            negocioData = NegocioData()
-        )
     }
 }

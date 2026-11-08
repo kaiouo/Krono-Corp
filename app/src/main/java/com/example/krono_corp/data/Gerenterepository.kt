@@ -9,8 +9,9 @@ data class CuentaSupervisor(
     val alias: String,
     val email: String,
     val phone: String,
-    val sucursal: String,    // vacío = todavía sin asignar
-    val gerenteId: String    // vacío = todavía sin gerente
+    val sucursal: String,    // ID de la sucursal (tabla sucursales); vacío = todavía sin asignar
+    val gerenteId: String,   // vacío = todavía sin gerente
+    val invitadoPor: String = ""  // id del gerente cuyo enlace de invitación usó al registrarse
 )
 
 /**
@@ -23,10 +24,12 @@ object GerenteRepository {
     private val db get() = AppwriteClient.tablesDB
     private val dbId get() = AppwriteClient.DATABASE_ID
 
-    /** Supervisores que el gerente puede ver: los de su equipo y los que aún no tienen gerente */
+    /** Supervisores que el gerente puede ver: los de su equipo y los que invitó y aún no asigna */
     suspend fun supervisoresVisibles(gerenteId: String): Result<List<CuentaSupervisor>> =
         appwriteSafe("usuarios") {
-            cuentasSupervisor().filter { it.gerenteId == gerenteId || it.gerenteId.isBlank() }
+            cuentasSupervisor().filter {
+                it.gerenteId == gerenteId || (it.gerenteId.isBlank() && it.invitadoPor == gerenteId)
+            }
         }
 
     /** Supervisores que controla este gerente */
@@ -35,20 +38,32 @@ object GerenteRepository {
             cuentasSupervisor().filter { it.gerenteId == gerenteId }
         }
 
-    /** Cuentas SUPERVISOR que se registraron pero aún no tienen gerente */
+    /** Cuentas SUPERVISOR que se registraron pero aún no tienen gerente (de cualquier gerente) */
     suspend fun sinAsignar(): Result<List<CuentaSupervisor>> =
         appwriteSafe("usuarios") {
             cuentasSupervisor().filter { it.gerenteId.isBlank() }
         }
 
-    /** Agrega al supervisor al equipo del gerente y lo ubica en una sucursal */
-    suspend fun asignar(supervisorId: String, gerenteId: String, sucursal: String): Result<Unit> =
+    /**
+     * Cuentas SUPERVISOR que se registraron con el enlace de ESTE gerente
+     * y todavía no tienen sucursal asignada.
+     */
+    suspend fun sinAsignarDe(gerenteId: String): Result<List<CuentaSupervisor>> =
+        appwriteSafe("usuarios") {
+            cuentasSupervisor().filter { it.gerenteId.isBlank() && it.invitadoPor == gerenteId }
+        }
+
+    /**
+     * Agrega al supervisor al equipo del gerente y lo ubica en una sucursal.
+     * [sucursalId] es el ID de la fila de la tabla sucursales.
+     */
+    suspend fun asignar(supervisorId: String, gerenteId: String, sucursalId: String): Result<Unit> =
         appwriteSafe("usuarios") {
             db.updateRow(
                 databaseId = dbId,
                 tableId = AppwriteClient.TABLE_ID,
                 rowId = supervisorId,
-                data = mapOf("gerenteId" to gerenteId, "sucursal" to sucursal)
+                data = mapOf("gerenteId" to gerenteId, "sucursal" to sucursalId)
             )
             Unit
         }
@@ -83,6 +98,7 @@ object GerenteRepository {
         email = data["email"] as? String ?: "",
         phone = data["phoneNumber"] as? String ?: "",
         sucursal = data["sucursal"] as? String ?: "",
-        gerenteId = data["gerenteId"] as? String ?: ""
+        gerenteId = data["gerenteId"] as? String ?: "",
+        invitadoPor = data["invitadoPor"] as? String ?: ""
     )
 }

@@ -42,10 +42,12 @@ fun KronoBottomBar(
 ) {
     val context = LocalContext.current
 
+    // Sin altura fija: NavigationBar ya calcula su alto (80dp) MÁS el espacio de la barra de
+    // navegación del sistema (botones o gestos). Con height(72.dp) ese espacio se comía el
+    // contenido y los iconos/etiquetas quedaban cortados arriba y abajo.
     NavigationBar(
         containerColor = Color.White,
-        tonalElevation = 8.dp,
-        modifier = Modifier.height(72.dp)
+        tonalElevation = 8.dp
     ) {
         val items = listOf(
             Triple("Home", Icons.Outlined.Home, Screen.Home.route),

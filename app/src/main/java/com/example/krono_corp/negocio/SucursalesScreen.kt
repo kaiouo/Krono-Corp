@@ -1,6 +1,7 @@
 package com.example.krono_corp.negocio
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,8 +34,14 @@ fun SucursalesScreen(
     navController: NavController,
     negocioData: NegocioData,
     negocioId: String,
-    // Item 9: el supervisor solo puede VER las sucursales, no agregar/editar/eliminar.
-    puedeEditar: Boolean = true
+    // El supervisor solo puede VER las sucursales; el dueño y el gerente pueden agregar/editar/eliminar.
+    puedeEditar: Boolean = true,
+    // true  = comportamiento anterior (flecha, ajustes, barra inferior del negocio)
+    // false = pantalla embebida (la usa el GERENTE dentro de AdminScreen, que ya tiene sus barras)
+    mostrarBarras: Boolean = true,
+    // Solo para el SUPERVISOR: null = no mostrar nada; "" = aún sin sucursal;
+    // cualquier otro valor = ID (o nombre) de la sucursal que le asignó su gerente.
+    sucursalAsignada: String? = null
 ) {
     val sucursales = remember { mutableStateListOf<SucursalItem>() }
     var cargando by remember { mutableStateOf(true) }
@@ -46,6 +53,7 @@ fun SucursalesScreen(
     var codigoSucursalDialogo by remember { mutableStateOf("") }
     var estaActivaDialogo by remember { mutableStateOf(true) }
     var idEditando by remember { mutableStateOf<String?>(null) }
+    var porEliminar by remember { mutableStateOf<SucursalItem?>(null) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -69,6 +77,13 @@ fun SucursalesScreen(
     fun guardarDialogo() {
         val nombre = nombreNuevaSucursal.trim()
         if (nombre.isEmpty() || guardando) return
+        val duplicada = sucursales.any {
+            it.id != idEditando && it.nombre.equals(nombre, ignoreCase = true)
+        }
+        if (duplicada) {
+            avisar("Ya existe una sucursal con ese nombre.")
+            return
+        }
         val codigo = codigoSucursalDialogo.trim().ifEmpty { "1234" }
         val editando = idEditando
         scope.launch {
@@ -121,46 +136,121 @@ fun SucursalesScreen(
     }
 
     val filtradas = sucursales.filter { it.nombre.contains(textoBusqueda, ignoreCase = true) }
+    val activas = sucursales.count { it.activa }
+    val asignada = sucursalAsignada?.let { v ->
+        sucursales.firstOrNull { it.id == v || it.nombre.equals(v, ignoreCase = true) }
+    }
 
     Scaffold(
         containerColor = Color.White,
         bottomBar = {
-            KronoBottomBar(navController = navController, currentRoute = Screen.Sucursales.route)
+            if (mostrarBarras) {
+                KronoBottomBar(navController = navController, currentRoute = Screen.Sucursales.route)
+            }
         }
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
         ) {
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                KronoTopAvatarBar(
-                    letraAvatar = "🏢",
-                    onBackClick = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.Home.route)
-                        }
-                    },
-                    onGearClick = { navController.navigate(Screen.Configuracion.route) }
-                )
-            }
-
-            item {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Administración de\nSucursales",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = KronoTextDark,
-                        lineHeight = 30.sp
+            if (mostrarBarras) {
+                item {
+                    // Barra superior original, sin emoji de edificio
+                    KronoTopAvatarBar(
+                        letraAvatar = "S",
+                        onBackClick = {
+                            if (!navController.popBackStack()) {
+                                navController.navigate(Screen.Home.route)
+                            }
+                        },
+                        onGearClick = { navController.navigate(Screen.Configuracion.route) }
                     )
                 }
             }
 
+            // ---------- Encabezado ----------
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Administración de Sucursales",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = KronoTextDark,
+                        lineHeight = 28.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (sucursales.isEmpty()) "Aún no hay sucursales"
+                        else "${sucursales.size} en total · $activas activas",
+                        fontSize = 13.sp,
+                        color = KronoTextMuted
+                    )
+                }
+            }
+
+            // ---------- Sucursal asignada por el gerente (solo supervisor) ----------
+            if (sucursalAsignada != null) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFEBF3FF)),
+                        border = BorderStroke(1.dp, Color(0xFFBFD7FF))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "TU SUCURSAL ASIGNADA",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = KronoBlue
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = when {
+                                    asignada != null -> asignada.nombre
+                                    cargando -> "Cargando…"
+                                    else -> "Aún sin asignar"
+                                },
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = KronoTextDark
+                            )
+                            if (asignada == null && !cargando) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "Tu gerente todavía no te ha asignado una sucursal.",
+                                    fontSize = 12.sp,
+                                    color = KronoTextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------- Botón agregar (uno solo) ----------
+            if (puedeEditar) {
+                item {
+                    Button(
+                        onClick = { abrirDialogo(null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = KronoBlue)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Agregar sucursal", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                }
+            }
+
+            // ---------- Búsqueda ----------
             item {
                 OutlinedTextField(
                     value = textoBusqueda,
@@ -174,7 +264,8 @@ fun SucursalesScreen(
                             modifier = Modifier.size(20.dp)
                         )
                     },
-                    shape = RoundedCornerShape(16.dp),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedContainerColor = KronoSurfaceVariant,
                         focusedContainerColor = Color.White,
@@ -186,20 +277,39 @@ fun SucursalesScreen(
             }
 
             if (cargando) {
-                item { CircularProgressIndicator(color = KronoBlue) }
+                item {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = KronoBlue
+                    )
+                }
             }
 
+            if (!cargando && filtradas.isEmpty()) {
+                item {
+                    Text(
+                        text = if (sucursales.isEmpty())
+                            "Todavía no has creado sucursales. Usa «Agregar sucursal» para crear la primera."
+                        else "No hay sucursales que coincidan con la búsqueda.",
+                        fontSize = 13.sp,
+                        color = KronoTextMuted,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+            }
+
+            // ---------- Lista ----------
             items(filtradas, key = { it.id }) { sucursal ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
@@ -217,28 +327,57 @@ fun SucursalesScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(Modifier.width(12.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = sucursal.nombre,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = KronoTextDark
+                                fontSize = 15.sp,
+                                color = KronoTextDark,
+                                maxLines = 1
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (sucursal.activa) KronoGreenBadge else Color(0xFFFFECEC))
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = if (sucursal.activa) "ACTIVA" else "INACTIVA",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (sucursal.activa) KronoGreenText else Color(0xFFEB5757)
-                                )
+                            Spacer(Modifier.height(4.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(
+                                            if (sucursal.activa) KronoGreenBadge else Color(0xFFFFECEC)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (sucursal.activa) "ACTIVA" else "INACTIVA",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (sucursal.activa) KronoGreenText else Color(0xFFEB5757)
+                                    )
+                                }
+                                if (asignada != null && sucursal.id == asignada.id) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFFEBF3FF))
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "TU SUCURSAL",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = KronoBlue
+                                        )
+                                    }
+                                }
+                                if (puedeEditar) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Código: ${sucursal.codigoAcceso}",
+                                        fontSize = 11.sp,
+                                        color = KronoTextMuted
+                                    )
+                                }
                             }
                         }
 
@@ -251,8 +390,7 @@ fun SucursalesScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
-
-                            IconButton(onClick = { eliminar(sucursal) }) {
+                            IconButton(onClick = { porEliminar = sucursal }) {
                                 Icon(
                                     imageVector = Icons.Default.DeleteOutline,
                                     contentDescription = "Eliminar",
@@ -265,61 +403,25 @@ fun SucursalesScreen(
                 }
             }
 
-            if (puedeEditar) {
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    FloatingActionButton(
-                        onClick = { abrirDialogo(null) },
-                        containerColor = KronoBlue,
-                        contentColor = Color.White,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.size(52.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Agregar",
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                }
-
-                item {
-                    OutlinedButton(
-                        onClick = { abrirDialogo(null) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.5.dp, KronoBlue),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = KronoBlue)
-                    ) {
-                        Text(
-                            text = "Agregar Sucursal",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(20.dp))
-                }
-            } else {
+            if (!puedeEditar) {
                 item {
                     Text(
-                        "Solo el dueño del negocio puede agregar, editar o eliminar sucursales.",
+                        "Solo tu gerente puede agregar, editar o eliminar sucursales.",
                         fontSize = 12.sp,
                         color = KronoTextMuted
                     )
-                    Spacer(modifier = Modifier.height(20.dp))
                 }
             }
         }
     }
 
+    // ---------- Diálogo crear / editar ----------
     if (mostrarDialogo) {
         AlertDialog(
             onDismissRequest = { if (!guardando) mostrarDialogo = false },
             title = {
                 Text(
-                    text = if (idEditando == null) "Nueva Sucursal" else "Editar Sucursal",
+                    text = if (idEditando == null) "Nueva sucursal" else "Editar sucursal",
                     fontWeight = FontWeight.Bold
                 )
             },
@@ -344,7 +446,7 @@ fun SucursalesScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Estado de la sede:", fontSize = 14.sp)
+                        Text("Sucursal activa", fontSize = 14.sp)
                         Switch(
                             checked = estaActivaDialogo,
                             onCheckedChange = { estaActivaDialogo = it }
@@ -362,12 +464,29 @@ fun SucursalesScreen(
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { mostrarDialogo = false },
-                    enabled = !guardando
-                ) {
+                TextButton(onClick = { mostrarDialogo = false }, enabled = !guardando) {
                     Text("Cancelar")
                 }
+            }
+        )
+    }
+
+    // ---------- Confirmar eliminación ----------
+    porEliminar?.let { s ->
+        AlertDialog(
+            onDismissRequest = { porEliminar = null },
+            title = { Text("¿Eliminar ${s.nombre}?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("La sucursal dejará de aparecer en Evaluación. Esta acción no se puede deshacer.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    porEliminar = null
+                    eliminar(s)
+                }) { Text("Eliminar", color = Color(0xFFEB5757)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { porEliminar = null }) { Text("Cancelar") }
             }
         )
     }

@@ -10,8 +10,10 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 navigationCompose = "2.8.5"
 appwrite = "13.0.0"
+pdfboxAndroid = "2.0.27.0"
 
 [libraries]
+pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfboxAndroid" }
 io-appwrite-sdk = { group = "io.appwrite", name = "sdk-for-android", version.ref = "appwrite" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

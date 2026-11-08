@@ -29,14 +29,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.krono_corp.data.Rol
 
-/** Exposed Dropdown Menu con el mismo estilo que AuthTextField */
+/**
+ * Exposed Dropdown Menu con el mismo estilo que AuthTextField.
+ * - roles: opciones que se muestran (por defecto todos)
+ * - bloqueado: muestra el rol pero no deja cambiarlo (registro por invitación)
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoleDropdown(
     label: String,
     seleccionado: Rol,
     onSeleccion: (Rol) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    roles: List<Rol> = Rol.entries,
+    bloqueado: Boolean = false
 ) {
     var expandido by remember { mutableStateOf(false) }
 
@@ -51,7 +57,7 @@ fun RoleDropdown(
 
         ExposedDropdownMenuBox(
             expanded = expandido,
-            onExpandedChange = { expandido = it }
+            onExpandedChange = { if (!bloqueado) expandido = it }
         ) {
             OutlinedTextField(
                 value = seleccionado.etiqueta,
@@ -61,7 +67,9 @@ fun RoleDropdown(
                 leadingIcon = {
                     Icon(Icons.Default.Person, contentDescription = null, tint = KronoColors.TextoSuave)
                 },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandido) },
+                trailingIcon = {
+                    if (!bloqueado) ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandido)
+                },
                 // Si tu versión de material3 es anterior a 1.3 usa: Modifier.menuAnchor()
                 modifier = Modifier
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -76,11 +84,11 @@ fun RoleDropdown(
             )
 
             ExposedDropdownMenu(
-                expanded = expandido,
+                expanded = expandido && !bloqueado,
                 onDismissRequest = { expandido = false },
                 modifier = Modifier.background(Color.White)
             ) {
-                Rol.entries.forEach { rol ->
+                roles.forEach { rol ->
                     DropdownMenuItem(
                         text = { Text(rol.etiqueta, color = KronoColors.TextoOscuro) },
                         onClick = {

@@ -2,8 +2,11 @@ package com.example.krono_corp.negocio
 
 import android.content.Context
 import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.AuthRepository
 import com.example.krono_corp.data.NuevaVenta
 import com.example.krono_corp.data.PreguntaVenta
+import com.example.krono_corp.data.Rol
+import com.example.krono_corp.data.SucursalesRepository
 import com.example.krono_corp.data.VentaRegistrada
 import com.example.krono_corp.data.VentasRepository
 import com.example.krono_corp.data.fechaHora
@@ -54,6 +57,8 @@ private class FlujoVenta(val pasos: List<PreguntaVenta>) {
     var descuento = 0.0
     var descuentoTexto = ""
     var sucursal = ""
+    var sucursalId = ""
+    var sucursalFija = false   // el supervisor registra siempre en su sucursal asignada
     var metodoPago = ""
     var nota = ""
     val extras = LinkedHashMap<String, String>()
@@ -199,13 +204,16 @@ class VentasChat(
     }
 
     private fun agregarColumna(textoOriginal: String, p: String): RespuestaChat {
+        if (usuario.role == Rol.SUPERVISOR) {
+            return RespuestaChat("Solo tu gerente puede agregar o cambiar las preguntas del registro de ventas.")
+        }
         val separador = Regex("\\b(sobre|para|de|que diga|llamada)\\b")
         val despues = separador.find(p)?.range?.last?.plus(1)
         val crudo = if (despues != null) textoOriginal.substring(despues).trim() else ""
         if (crudo.length < 3) {
             return RespuestaChat(
                 "¿Sobre qué quieres la nueva pregunta? Dime, por ejemplo: " +
-                    "«agrega una columna sobre el nombre del cliente»."
+                        "«agrega una columna sobre el nombre del cliente»."
             )
         }
         val etiqueta = crudo.replaceFirstChar { it.uppercase() }.trimEnd('.', '?', '!')
@@ -222,8 +230,8 @@ class VentasChat(
         alGuardarPreguntas(negocio.preguntasVenta.toList())
         return RespuestaChat(
             "Listo ✅ Agregué la pregunta «${nueva.texto}». A partir de ahora te la voy a preguntar " +
-                "cuando registres una venta, y va a salir como columna aparte en el Excel que exportes. " +
-                "También puedes editarla en «Mi Negocio»."
+                    "cuando registres una venta, y va a salir como columna aparte en el Excel que exportes. " +
+                    "También puedes editarla en «Mi Negocio»."
         )
     }
 
@@ -241,9 +249,29 @@ class VentasChat(
     // ------------------------------------------------------------------
     // Registrar venta (conversación guiada)
     // ------------------------------------------------------------------
-    private fun iniciarRegistro(): RespuestaChat {
+    private suspend fun iniciarRegistro(): RespuestaChat {
+        // Perfil fresco: el gerente pudo asignar al supervisor después de iniciar sesión
+        val actual = AuthRepository.currentUser() ?: usuario
+        val esSupervisor = actual.role == Rol.SUPERVISOR && actual.gerenteId.isNotBlank()
+
+        // Las sucursales viven en Appwrite: las del gerente (supervisor) o las propias (dueño)
+        SucursalesRepository.listar(if (esSupervisor) actual.gerenteId else actual.id)
+            .onSuccess { lista ->
+                negocio.sucursales.clear()
+                negocio.sucursales.addAll(lista)
+            }
+
         val pasos = PreguntaVenta.normalizar(negocio.preguntasVenta).filter { it.activa || it.obligatoria }
         val flujo = FlujoVenta(pasos)
+        if (esSupervisor) {
+            negocio.sucursales.firstOrNull {
+                it.id == actual.sucursal || it.nombre.equals(actual.sucursal, ignoreCase = true)
+            }?.let {
+                flujo.sucursal = it.nombre
+                flujo.sucursalId = it.id
+                flujo.sucursalFija = true
+            }
+        }
         estado = Estado.Registrando(flujo)
         val encabezado = "Perfecto, vamos a registrar una venta. (Escribe «cancelar» en cualquier momento para salir.)\n\n"
         val primera = avanzar(flujo)
@@ -277,7 +305,7 @@ class VentasChat(
         // Si no hay sucursales activas, esa pregunta se omite
         while (f.indice < f.pasos.size &&
             f.pasos[f.indice].id == PreguntaVenta.SUCURSAL &&
-            opcionesSucursal().isEmpty()
+            (f.sucursalFija || opcionesSucursal().isEmpty())
         ) f.indice++
 
         if (f.indice < f.pasos.size) return RespuestaChat(preguntaActual(f))
@@ -328,6 +356,7 @@ class VentasChat(
             PreguntaVenta.SUCURSAL -> {
                 f.sucursal = if (omitir) "" else resolverOpcion(e, opcionesSucursal())
                     ?: return RespuestaChat("No reconocí la sucursal.\n\n" + preguntaActual(f))
+                f.sucursalId = negocio.sucursales.firstOrNull { it.nombre == f.sucursal }?.id ?: ""
             }
             PreguntaVenta.METODO_PAGO -> {
                 f.metodoPago = if (omitir) "" else resolverOpcion(e, METODOS_PAGO)
@@ -378,7 +407,7 @@ class VentasChat(
             nota = f.nota,
             extras = f.extras.toMap()
         )
-        return VentasRepository.guardar(usuario, nueva).fold(
+        return VentasRepository.guardar(usuario, nueva, f.sucursalId).fold(
             onSuccess = {
                 estado = null
                 RespuestaChat(

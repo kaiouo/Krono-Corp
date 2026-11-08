@@ -3,6 +3,7 @@ package com.example.krono_corp.reportes
 import android.content.Context
 import com.example.krono_corp.data.VentaRegistrada
 import com.example.krono_corp.data.fechaHora
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -153,6 +154,124 @@ object VentasExcel {
         }
         sb.append("</sheetData></worksheet>")
         return sb.toString()
+    }
+
+    // ---------------------------------------------------------------- Excel desde texto (lo usa la IA)
+
+    private val NUMERO = Regex("-?(0|[1-9][0-9]{0,14})(\\.[0-9]+)?")
+    private val PALABRAS_DINERO = listOf("precio", "total", "descuento", "monto", "costo", "importe", "iva", "ganancia")
+
+    /**
+     * Crea un .xlsx con el diseño de Krono (encabezado azul, formato de dinero, filas TOTAL en negrita
+     * con fórmulas SUM, panel congelado y anchos) a partir de hojas ya convertidas a texto.
+     * La IA lo usa cuando no puede editar el Excel original, para que el resultado NUNCA salga sin color.
+     */
+    fun desdeTabla(hojas: List<Pair<String, List<List<String>>>>): ByteArray {
+        val lista = hojas.ifEmpty { listOf("Hoja1" to emptyList()) }
+        val usados = mutableSetOf<String>()
+        val nombres = lista.mapIndexed { i, h -> nombreHojaValido(h.first, usados, i + 1) }
+        val xmlHojas = lista.map { hojaDesdeTabla(it.second) }
+
+        val bos = ByteArrayOutputStream()
+        ZipOutputStream(bos).use { zip ->
+            fun entrada(nombre: String, contenido: String) {
+                zip.putNextEntry(ZipEntry(nombre))
+                zip.write(contenido.toByteArray(Charsets.UTF_8))
+                zip.closeEntry()
+            }
+            entrada("[Content_Types].xml", contentTypesN(lista.size))
+            entrada("_rels/.rels", RELS_RAIZ)
+            entrada("xl/workbook.xml", workbookN(nombres))
+            entrada("xl/_rels/workbook.xml.rels", workbookRelsN(lista.size))
+            entrada("xl/styles.xml", STYLES)
+            xmlHojas.forEachIndexed { i, x -> entrada("xl/worksheets/sheet${i + 1}.xml", x) }
+        }
+        return bos.toByteArray()
+    }
+
+    private fun tipoColumna(encabezado: String): Int {
+        val h = encabezado.lowercase()
+        return when {
+            "ventas" in h -> NORMAL
+            PALABRAS_DINERO.any { it in h } -> DINERO
+            "cant" in h || "unidad" in h -> ENTERO
+            else -> NORMAL
+        }
+    }
+
+    private fun hojaDesdeTabla(filas: List<List<String>>): String {
+        val datos = filas.filter { f -> f.any { it.isNotBlank() } }
+        if (datos.isEmpty()) return hojaXml(emptyList(), emptyList())
+
+        val encabezados = datos.first()
+        val columnas = datos.maxOf { it.size }
+        val tipos = (0 until columnas).map { tipoColumna(encabezados.getOrElse(it) { "" }) }
+
+        val celdas = mutableListOf<List<Celda?>>()
+        celdas += (0 until columnas).map { Txt(encabezados.getOrElse(it) { "" }, ENCABEZADO) }
+
+        datos.drop(1).forEachIndexed { i, fila ->
+            val numFila = i + 2
+            val esTotal = fila.firstOrNull()?.trim().equals("TOTAL", ignoreCase = true)
+            celdas += (0 until columnas).map { c ->
+                val v = fila.getOrElse(c) { "" }.trim()
+                when {
+                    v.isEmpty() -> null
+                    NUMERO.matches(v) -> {
+                        val estilo = when (tipos[c]) {
+                            DINERO -> if (esTotal) DINERO_NEGRITA else DINERO
+                            ENTERO -> if (esTotal) NEGRITA else ENTERO
+                            else -> if (esTotal) NEGRITA else NORMAL
+                        }
+                        if (esTotal && tipos[c] != NORMAL && numFila > 2) {
+                            Formula("SUM(${columna(c)}2:${columna(c)}${numFila - 1})", v.toDouble(), estilo)
+                        } else {
+                            Num(v.toDouble(), estilo)
+                        }
+                    }
+                    else -> Txt(v, if (esTotal) NEGRITA else NORMAL)
+                }
+            }
+        }
+
+        val anchos = (0 until columnas).map { c ->
+            datos.maxOf { it.getOrElse(c) { "" }.length }.coerceIn(10, 40)
+        }
+        return hojaXml(celdas, anchos)
+    }
+
+    private fun nombreHojaValido(crudo: String, usados: MutableSet<String>, numero: Int): String {
+        var nombre = crudo.replace(Regex("""[\\/?*\[\]:]"""), "_").trim().take(31)
+        if (nombre.isBlank()) nombre = "Hoja$numero"
+        var resultado = nombre
+        var n = 2
+        while (!usados.add(resultado.lowercase())) {
+            val sufijo = " ($n)"
+            resultado = nombre.take(31 - sufijo.length) + sufijo
+            n++
+        }
+        return resultado
+    }
+
+    private fun contentTypesN(n: Int): String {
+        val hojas = (1..n).joinToString("") {
+            """<Override PartName="/xl/worksheets/sheet${it}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
+        }
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${hojas}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"""
+    }
+
+    private fun workbookN(nombres: List<String>): String {
+        val hojas = nombres.mapIndexed { i, n ->
+            """<sheet name="${escapar(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>"""
+        }.joinToString("")
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${hojas}</sheets><calcPr fullCalcOnLoad="1"/></workbook>"""
+    }
+
+    private fun workbookRelsN(n: Int): String {
+        val hojas = (1..n).joinToString("") {
+            """<Relationship Id="rId${it}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${it}.xml"/>"""
+        }
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${hojas}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"""
     }
 
     // ---------------------------------------------------------------- utilidades

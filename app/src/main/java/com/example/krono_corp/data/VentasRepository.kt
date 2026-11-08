@@ -9,6 +9,15 @@ import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
+/** Lo mínimo de una venta que necesita el GERENTE para medir el rendimiento por sucursal. */
+data class VentaDeSucursal(
+    val usuarioId: String,
+    val sucursalId: String,  // ID de la sucursal (vacío en ventas antiguas)
+    val sucursal: String,    // nombre de la sucursal tal como se registró
+    val cantidad: Int,
+    val total: Double
+)
+
 /** Ventas que registra el SUPERVISOR o el DUENO desde el chat con la IA. */
 object VentasRepository {
 
@@ -18,8 +27,19 @@ object VentasRepository {
     private val db get() = AppwriteClient.tablesDB
     private val dbId get() = AppwriteClient.DATABASE_ID
 
-    suspend fun guardar(usuario: AppUser, v: NuevaVenta): Result<VentaRegistrada> =
+    suspend fun guardar(
+        usuario: AppUser,
+        v: NuevaVenta,
+        sucursalId: String = ""
+    ): Result<VentaRegistrada> =
         appwriteSafe(TABLE) {
+            // El dueño de la venta puede leerla y eliminarla (para corregir errores).
+            // El gerente la lee por el permiso de la etiqueta «gerente» a nivel de tabla:
+            // Appwrite no deja que un usuario otorgue permisos a roles que él no tiene.
+            val permisos = listOf(
+                Permission.read(Role.user(usuario.id)),
+                Permission.delete(Role.user(usuario.id))
+            )
             val fila = db.createRow(
                 databaseId = dbId,
                 tableId = TABLE,
@@ -34,15 +54,12 @@ object VentasRepository {
                     "descuento" to v.descuento,
                     "total" to v.total,
                     "sucursal" to v.sucursal,
+                    "sucursalId" to sucursalId,
                     "metodoPago" to v.metodoPago,
                     "nota" to v.nota,
                     "extras" to JSONObject(v.extras).toString()
                 ),
-                // El dueño de la venta puede leerla y eliminarla (para corregir errores)
-                permissions = listOf(
-                    Permission.read(Role.user(usuario.id)),
-                    Permission.delete(Role.user(usuario.id))
-                )
+                permissions = permisos
             )
             fila.toVenta()
         }
@@ -60,6 +77,32 @@ object VentasRepository {
             cursor = pagina.last().id
         }
         todas.filter { it.usuarioId == usuarioId }
+    }
+
+    /**
+     * Ventas que el gerente puede leer (las de sus supervisores, por permiso de fila).
+     * El gerente filtra después por sus sucursales y supervisores.
+     */
+    suspend fun listarParaGerente(): Result<List<VentaDeSucursal>> = appwriteSafe(TABLE) {
+        val todas = mutableListOf<VentaDeSucursal>()
+        var cursor: String? = null
+        while (todas.size < MAX_FILAS) {
+            val consultas = mutableListOf(Query.limit(100))
+            cursor?.let { consultas.add(Query.cursorAfter(it)) }
+            val pagina = db.listRows(databaseId = dbId, tableId = TABLE, queries = consultas).rows
+            todas += pagina.map {
+                VentaDeSucursal(
+                    usuarioId = it.data["usuarioId"] as? String ?: "",
+                    sucursalId = it.data["sucursalId"] as? String ?: "",
+                    sucursal = it.data["sucursal"] as? String ?: "",
+                    cantidad = (it.data["cantidad"] as? Number)?.toInt() ?: 0,
+                    total = (it.data["total"] as? Number)?.toDouble() ?: 0.0
+                )
+            }
+            if (pagina.size < 100) break
+            cursor = pagina.last().id
+        }
+        todas
     }
 
     suspend fun eliminar(id: String): Result<Unit> = appwriteSafe(TABLE) {

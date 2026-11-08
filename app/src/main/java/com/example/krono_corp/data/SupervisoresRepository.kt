@@ -24,7 +24,7 @@ data class VentaIntegrante(
 )
 
 /** Equipos que existen en la empresa */
-val EQUIPOS = listOf("Norte", "Centro", "Sur")
+val EQUIPOS = listOf("Norte", "Centro", "Sur") //Esta lista debe dejar de existir, los equipos solo deben de salir segun las sucursales que Gerente General cree
 
 object SupervisoresRepository {
 

@@ -7,11 +7,13 @@ import org.json.JSONArray
 data class NegocioGuardado(
     val nombreNegocio: String,
     /** null = nunca se han guardado preguntas (se usan las de por defecto). */
-    val preguntasIA: List<String>?
+    val preguntasIA: List<String>?,
+    /** Preguntas del registro de ventas configuradas por el gerente (null = sin configurar). */
+    val preguntasVenta: List<PreguntaVenta>? = null
 )
 
 /**
- * Guarda el nombre del negocio y las preguntas para la IA en la tabla "negocios".
+ * Guarda el nombre del negocio y las preguntas en la tabla "negocios".
  * Usa el id del usuario (ownerId) como id de la fila: una fila por usuario.
  */
 object NegocioRepository {
@@ -31,24 +33,33 @@ object NegocioRepository {
             )
             NegocioGuardado(
                 nombreNegocio = fila.data["nombreNegocio"] as? String ?: "",
-                preguntasIA = preguntasDesdeJson(fila.data["preguntasIA"] as? String)
+                preguntasIA = preguntasDesdeJson(fila.data["preguntasIA"] as? String),
+                preguntasVenta = PreguntaVenta.desdeJson(fila.data["preguntasVenta"] as? String)
+                    ?.let { PreguntaVenta.normalizar(it) }
             )
         } catch (e: AppwriteException) {
             if (e.code == 404) null else throw e
         }
     }
 
-    /** Crea la fila si no existe y la actualiza si ya existe. */
+    /**
+     * Crea la fila si no existe y la actualiza si ya existe.
+     * preguntasVenta solo se envía si no es null (así el Dueño no necesita la columna).
+     */
     suspend fun guardar(
         ownerId: String,
         nombreNegocio: String,
-        preguntasIA: List<String>
+        preguntasIA: List<String>,
+        preguntasVenta: List<PreguntaVenta>? = null
     ): Result<Unit> = appwriteSafe("negocios") {
-        val datos = mapOf(
+        val datos = mutableMapOf<String, Any>(
             "ownerId" to ownerId,
             "nombreNegocio" to nombreNegocio.trim().ifEmpty { "Mi negocio" },
             "preguntasIA" to preguntasAJson(preguntasIA)
         )
+        if (preguntasVenta != null) {
+            datos["preguntasVenta"] = PreguntaVenta.aJson(preguntasVenta)
+        }
         try {
             db.updateRow(
                 databaseId = dbId,

@@ -1,46 +1,42 @@
 package com.example.krono_corp.Admin
 
-
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Domain
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.components.AdminTopBar
-import com.example.krono_corp.components.AdminBottomBar
-import kotlinx.coroutines.launch
-import com.example.krono_corp.components.AdminRoutes
-import com.example.krono_corp.data.AppUser
-import androidx.compose.material.icons.filled.Store
-import androidx.compose.material.icons.filled.Domain
-import androidx.compose.runtime.mutableStateListOf
 import androidx.navigation.compose.rememberNavController
-//import com.example.krono_corp.Supervisor.Sucursal
-import com.example.krono_corp.components.SupervisorRoutes
-import com.example.krono_corp.negocio.HistorialGraficosScreen
+import com.example.krono_corp.components.AdminBottomBar
+import com.example.krono_corp.components.AdminRoutes
+import com.example.krono_corp.components.AdminTopBar
+import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.NegocioRepository
+import com.example.krono_corp.negocio.MiNegocioScreen
 import com.example.krono_corp.negocio.NegocioData
 import com.example.krono_corp.negocio.SucursalesScreen
+import kotlinx.coroutines.launch
 
 
 // COLORES DE LA APLICACIÓN
 
-private val Azul = Color(0xFF1677FF)
 private val Fondo = Color(0xFFF7F8FC)
 private val Texto = Color(0xFF202633)
 private val Gris = Color(0xFF747780)
@@ -50,12 +46,11 @@ private val Evaluacion = AdminRoutes.EVALUACION
 private val NuevoAdmin = AdminRoutes.NUEVO_ADMIN
 private val Historial = AdminRoutes.HISTORIAL
 private val Asistente = AdminRoutes.ASISTENTE
-
 private val MiNegocio = AdminRoutes.MI_NEGOCIO
-
-//private val HistorialGraficos = AdminRoutes.HISTORIAL_GRAFICOS
 private val Sucursales = AdminRoutes.SUCURSALES
 
+// Nueva opción (no necesita tocar AdminRoutes)
+private const val Metricas = "Métricas de supervisores"
 
 
 // PANTALLA PRINCIPAL Y NAVEGACIÓN
@@ -64,19 +59,47 @@ private val Sucursales = AdminRoutes.SUCURSALES
 fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
 
     var pantalla by remember { mutableStateOf(Panel) }
-    // Controlador de navegación
     val navController = rememberNavController()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // Datos compartidos del negocio
     val negocio = remember(usuario.id) {
         NegocioData(propietarioEmail = usuario.email)
     }
 
+    // Carga lo que el gerente guardó en Appwrite (nombre, preguntas IA y preguntas de venta)
+    var negocioListo by remember(usuario.id) { mutableStateOf(false) }
+    LaunchedEffect(usuario.id) {
+        NegocioRepository.cargar(usuario.id)
+            .onSuccess { guardado ->
+                if (guardado != null) {
+                    if (guardado.nombreNegocio.isNotBlank()) {
+                        negocio.nombreNegocio = guardado.nombreNegocio
+                    }
+                    guardado.preguntasIA?.let {
+                        negocio.preguntasIA.clear()
+                        negocio.preguntasIA.addAll(it)
+                    }
+                    guardado.preguntasVenta?.let {
+                        negocio.preguntasVenta.clear()
+                        negocio.preguntasVenta.addAll(it)
+                    }
+                }
+            }
+            .onFailure {
+                Toast.makeText(
+                    context,
+                    it.message ?: "No se pudo cargar la configuración del negocio.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        negocioListo = true
+    }
+
     val drawerState = rememberDrawerState(
         initialValue = DrawerValue.Closed
     )
-
-    val scope = rememberCoroutineScope()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -124,6 +147,7 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
                     Panel,
                     Asistente,
                     Evaluacion,
+                    Metricas,
                     NuevoAdmin,
                     Historial
                 )
@@ -174,7 +198,7 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
                     }
                 )
             },
-            //barra inferior
+            // BARRA INFERIOR
             bottomBar = {
                 AdminBottomBar(
                     pantallaActual = pantalla,
@@ -199,38 +223,71 @@ fun AdminScreen(usuario: AppUser, alCerrarSesion: () -> Unit = {}) {
                     Panel -> PanelControl(
                         abrirPantalla = { pantalla = it }
                     )
-                    MiNegocio -> MiNegocioGerenteScreen(
-                        usuario = usuario,
-                        alVolver = { pantalla = Panel }
-                    )
+
+                    // MI NEGOCIO: el gerente configura aquí las preguntas de sus supervisores
+                    MiNegocio -> {
+                        if (!negocioListo) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        } else {
+                            MiNegocioScreen(
+                                navController = navController,
+                                negocioData = negocio,
+                                mostrarBarra = false,
+                                onGuardarCambios = { nombre, preguntas ->
+                                    negocio.nombreNegocio = nombre.ifBlank { "Mi negocio" }
+                                    negocio.preguntasIA.clear()
+                                    negocio.preguntasIA.addAll(preguntas)
+                                },
+                                onGuardarPreguntasVenta = { lista ->
+                                    negocio.preguntasVenta.clear()
+                                    negocio.preguntasVenta.addAll(lista)
+                                    // Se guarda todo junto en una sola escritura
+                                    scope.launch {
+                                        NegocioRepository.guardar(
+                                            ownerId = usuario.id,
+                                            nombreNegocio = negocio.nombreNegocio,
+                                            preguntasIA = negocio.preguntasIA.toList(),
+                                            preguntasVenta = lista
+                                        ).onFailure {
+                                            Toast.makeText(
+                                                context,
+                                                it.message ?: "No se pudo guardar el negocio.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+
                     Asistente -> AsistenteIAScreen(usuario)
 
                     Evaluacion -> EvaluacionScreen(usuario)
+
+                    Metricas -> MetricasSupervisoresScreen(usuario)
 
                     NuevoAdmin -> NuevoAdministradorScreen(usuario)
 
                     Historial -> HistorialReportesScreen(usuario)
 
-                    // MI SUCURSAL
+                    // SUCURSALES
                     Sucursales -> SucursalesScreen(
                         navController = navController,
                         negocioData = negocio,
                         negocioId = usuario.id,
-                        puedeEditar = false
+                        puedeEditar = true,
+                        mostrarBarras = false
                     )
-
-                    // HISTORIAL DE GRÁFICOS
-                   // HistorialGraficos -> HistorialGraficosScreen(
-                     //   navController = navController,
-                       // negocioData = negocio
-                    //)
                 }
             }
         }
     }
 }
 
-// PANEL PRINCIPAL C
+// PANEL PRINCIPAL
 
 @Composable
 private fun PanelControl(
@@ -334,6 +391,27 @@ private fun PanelControl(
                 abrirPantalla(Sucursales)
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        // CUARTA FILA
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+
+            TarjetaAdmin(
+                titulo = "Métricas de supervisores",
+                icono = Icons.Default.BarChart,
+                colorIcono = Color(0xFFE7A12B),
+                modifier = Modifier.weight(1f)
+            ) {
+                abrirPantalla(Metricas)
+            }
+
+            Spacer(Modifier.weight(1f))
+        }
     }
 }
 
@@ -385,6 +463,3 @@ private fun TarjetaAdmin(
         }
     }
 }
-
-
-

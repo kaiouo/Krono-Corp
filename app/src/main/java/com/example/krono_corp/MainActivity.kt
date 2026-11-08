@@ -25,6 +25,8 @@ import com.example.krono_corp.Login.ForgotPasswordScreen
 import com.example.krono_corp.Login.LoginScreen
 import com.example.krono_corp.Login.RegisterScreen
 import com.example.krono_corp.Login.ResetPasswordScreen
+import com.example.krono_corp.Login.VerificarCodigoScreen
+import com.example.krono_corp.Login.VerificarCorreoScreen
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AppwriteClient
 import com.example.krono_corp.data.AuthRepository
@@ -42,7 +44,7 @@ import com.example.krono_corp.negocio.HomeScreen
 import com.example.krono_corp.negocio.MetricasScreen
 import com.example.krono_corp.negocio.MiNegocioScreen
 import com.example.krono_corp.negocio.NegocioData
-import com.example.krono_corp.negocio.NuevaCuentaAdminScreen
+//import com.example.krono_corp.negocio.NuevaCuentaAdminScreen
 import com.example.krono_corp.negocio.ReporteGenerado
 import com.example.krono_corp.negocio.Screen
 import com.example.krono_corp.negocio.SucursalesScreen
@@ -77,13 +79,28 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Pantalla { CARGANDO, LOGIN, REGISTRO, OLVIDE_CONTRASENA, RESTABLECER_CONTRASENA, SESION }
+private enum class Pantalla {
+    CARGANDO,
+    LOGIN,
+    REGISTRO,
+    REVISA_CORREO,          // después de registrarse: "revisa tu correo para verificar"
+    VERIFICAR_CODIGO,       // segundo paso del login: código de 6 dígitos
+    OLVIDE_CONTRASENA,
+    RESTABLECER_CONTRASENA,
+    SESION
+}
 
 @Composable
 fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.CARGANDO) }
     var usuario by remember { mutableStateOf<AppUser?>(null) }
     var recuperacion by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
+    // Cuenta que está en el segundo paso del login (userId, correo)
+    var desafio by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
+    // Correo recién registrado, para la pantalla "Revisa tu correo"
+    var correoPendiente by rememberSaveable { mutableStateOf("") }
+    // Código del enlace de invitación (kronocorp://registro?codigo=..) para registrarse como Supervisor
+    var codigoInvitacion by rememberSaveable { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -101,6 +118,18 @@ fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
     // Enlace del correo de Appwrite: kronocorp://recovery?userId=..&secret=.. o kronocorp://verify?...
     LaunchedEffect(deepLink) {
         val uri = deepLink ?: return@LaunchedEffect
+
+        // Invitación de un gerente: abre el registro con el rol Supervisor fijo
+        if (uri.host == "registro") {
+            val codigo = uri.getQueryParameter("codigo")
+            if (!codigo.isNullOrBlank()) {
+                codigoInvitacion = codigo.trim()
+                pantalla = Pantalla.REGISTRO
+            }
+            alConsumirDeepLink()
+            return@LaunchedEffect
+        }
+
         val userId = uri.getQueryParameter("userId")
         val secret = uri.getQueryParameter("secret")
         if (!userId.isNullOrBlank() && !secret.isNullOrBlank()) {
@@ -112,11 +141,23 @@ fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
                 "verify" -> {
                     AuthRepository.confirmarVerificacion(userId, secret).fold(
                         onSuccess = {
-                            Toast.makeText(context, "Correo verificado ✅", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                context,
+                                "Correo verificado ✅ Ya puedes iniciar sesión.",
+                                Toast.LENGTH_LONG
+                            ).show()
                             usuario?.let { usuario = it.copy(emailVerificado = true) }
+                            // Si estaba en "Revisa tu correo", pasa al login
+                            if (pantalla == Pantalla.REVISA_CORREO) {
+                                pantalla = Pantalla.LOGIN
+                            }
                         },
                         onFailure = {
-                            Toast.makeText(context, it.message ?: "No se pudo verificar el correo.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                context,
+                                it.message ?: "No se pudo verificar el correo.",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     )
                 }
@@ -142,14 +183,45 @@ fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
         Pantalla.CARGANDO -> PantallaCargando()
 
         Pantalla.LOGIN -> LoginScreen(
-            onLoginSuccess = { entrar(it) },
+            onCodigoEnviado = { userId, email ->
+                desafio = userId to email
+                pantalla = Pantalla.VERIFICAR_CODIGO
+            },
             onGoToRegister = { pantalla = Pantalla.REGISTRO },
             onForgotPassword = { pantalla = Pantalla.OLVIDE_CONTRASENA }
         )
 
+        Pantalla.VERIFICAR_CODIGO -> desafio?.let { (userId, email) ->
+            VerificarCodigoScreen(
+                userId = userId,
+                email = email,
+                onVerificado = {
+                    desafio = null
+                    entrar(it)
+                },
+                onCancelar = {
+                    desafio = null
+                    pantalla = Pantalla.LOGIN
+                }
+            )
+        } ?: run { pantalla = Pantalla.LOGIN }
+
         Pantalla.REGISTRO -> RegisterScreen(
-            onRegisterSuccess = { entrar(it) },
-            onGoToLogin = { pantalla = Pantalla.LOGIN }
+            onRegisterSuccess = { correo ->
+                correoPendiente = correo
+                codigoInvitacion = null
+                pantalla = Pantalla.REVISA_CORREO
+            },
+            onGoToLogin = {
+                codigoInvitacion = null
+                pantalla = Pantalla.LOGIN
+            },
+            codigoInvitacion = codigoInvitacion
+        )
+
+        Pantalla.REVISA_CORREO -> VerificarCorreoScreen(
+            correo = correoPendiente,
+            onIrLogin = { pantalla = Pantalla.LOGIN }
         )
 
         Pantalla.OLVIDE_CONTRASENA -> ForgotPasswordScreen(
@@ -175,12 +247,14 @@ fun KronoApp(deepLink: Uri? = null, alConsumirDeepLink: () -> Unit = {}) {
                     usuario = u,
                     alCerrarSesion = { cerrarSesion() }
                 )
+
                 Rol.SUPERVISOR -> SupervisorScreen(
                     usuario = u,
                     alCerrarSesion = { cerrarSesion() }
                 )
-                // DUENO  -> flujo del negocio (empieza en MiNegocioScreen)
-                Rol.DUENO-> NegocioNavHost(
+
+                // DUENO y SUPERVISOR -> flujo del negocio (empieza en MiNegocioScreen)
+                Rol.DUENO -> NegocioNavHost(
                     usuario = u,
                     alCerrarSesion = { cerrarSesion() }
                 )
@@ -213,6 +287,26 @@ private fun NegocioNavHost(
         Toast.makeText(context, mensaje ?: porDefecto, Toast.LENGTH_LONG).show()
     }
 
+    // Un único objeto compartido por todas las pantallas (sus listas son mutables)
+    val negocio = remember(usuario.id) {
+        NegocioData(propietarioEmail = usuario.email)
+    }
+
+    // Trae el historial guardado en Appwrite (reportes con sus archivos del bucket, y gráficos)
+    // y actualiza las listas que leen las pantallas.
+    suspend fun recargarHistorial() {
+        HistorialRepository.cargar(usuario.id)
+            .onSuccess { historial ->
+                negocio.historialReportes.clear()
+                negocio.historialReportes.addAll(historial.reportes)
+                negocio.historialGraficos.clear()
+                negocio.historialGraficos.addAll(historial.graficos)
+            }
+            .onFailure {
+                avisarError(it.message, "No se pudo cargar tu historial de reportes y gráficos.")
+            }
+    }
+
     // Solo el SUPERVISOR envía sus reportes y gráficos a Appwrite (para que su gerente los vea)
     fun enviarAlGerente(tipo: String, titulo: String, fecha: String, contenido: String) {
         if (usuario.role != Rol.SUPERVISOR) return
@@ -229,6 +323,8 @@ private fun NegocioNavHost(
         scope.launch {
             HistorialRepository.guardarReporte(usuario.id, r)
                 .onFailure { avisarError(it.message, "No se pudo guardar el reporte en el historial.") }
+            // Aunque falle la subida del archivo, el texto se guarda: se refresca en ambos casos
+            recargarHistorial()
         }
     }
 
@@ -236,12 +332,8 @@ private fun NegocioNavHost(
         scope.launch {
             HistorialRepository.guardarGrafico(usuario.id, g)
                 .onFailure { avisarError(it.message, "No se pudo guardar el gráfico en el historial.") }
+            recargarHistorial()
         }
-    }
-
-    // Un único objeto compartido por todas las pantallas (sus listas son mutables)
-    val negocio = remember(usuario.id) {
-        NegocioData(propietarioEmail = usuario.email)
     }
 
     // Carga lo guardado en Appwrite antes de mostrar las pantallas
@@ -269,15 +361,7 @@ private fun NegocioNavHost(
         }
 
         // Historial de reportes (texto, PDF, Excel) y gráficos (tabla "reportes")
-        HistorialRepository.cargar(usuario.id).onSuccess { historial ->
-            negocio.historialReportes.clear()
-            negocio.historialReportes.addAll(historial.reportes)
-            negocio.historialGraficos.clear()
-            negocio.historialGraficos.addAll(historial.graficos)
-        }
-        .onFailure {
-            avisarError(it.message, "No se pudo cargar tu historial de reportes y gráficos.")
-        }
+        recargarHistorial()
         configLista = true
     }
     if (!configLista) {
@@ -373,8 +457,8 @@ private fun NegocioNavHost(
             HistorialGraficosScreen(navController = navController, negocioData = negocio)
         }
 
-        composable(Screen.NuevaCuentaAdmin.route) {
-            NuevaCuentaAdminScreen(navController = navController, negocioData = negocio)
-        }
+        //composable(Screen.NuevaCuentaAdmin.route) {
+        //    NuevaCuentaAdminScreen(navController = navController, negocioData = negocio)
+        //}
     }
 }
