@@ -1,8 +1,10 @@
 package com.example.krono_corp.reportes
 
 import android.content.Context
+import com.example.krono_corp.data.GraficoReporte
 import com.example.krono_corp.data.VentaRegistrada
 import com.example.krono_corp.data.fechaHora
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -33,7 +35,12 @@ object VentasExcel {
 
     private val vista = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
 
-    fun generar(context: Context, ventas: List<VentaRegistrada>, periodo: String): File {
+    fun generar(
+        context: Context,
+        ventas: List<VentaRegistrada>,
+        periodo: String,
+        grafico: GraficoReporte? = null
+    ): File {
         val carpeta = File(context.cacheDir, "reportes").apply { mkdirs() }
         val sello = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmm"))
         val archivo = File(carpeta, "Ventas_$sello.xlsx")
@@ -44,13 +51,22 @@ object VentasExcel {
                 zip.write(contenido.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
             }
-            entrada("[Content_Types].xml", CONTENT_TYPES)
+            entrada(
+                "[Content_Types].xml",
+                if (grafico != null) CONTENT_TYPES.replace("</Types>", TIPOS_GRAFICO + "</Types>") else CONTENT_TYPES
+            )
             entrada("_rels/.rels", RELS_RAIZ)
             entrada("xl/workbook.xml", WORKBOOK)
             entrada("xl/_rels/workbook.xml.rels", WORKBOOK_RELS)
             entrada("xl/styles.xml", STYLES)
             entrada("xl/worksheets/sheet1.xml", hojaVentas(ventas))
-            entrada("xl/worksheets/sheet2.xml", hojaResumen(ventas))
+            entrada("xl/worksheets/sheet2.xml", hojaResumen(ventas, grafico))
+            if (grafico != null) {
+                entrada("xl/worksheets/_rels/sheet2.xml.rels", RELS_HOJA_RESUMEN)
+                entrada("xl/drawings/drawing1.xml", DIBUJO)
+                entrada("xl/drawings/_rels/drawing1.xml.rels", RELS_DIBUJO)
+                entrada("xl/charts/chart1.xml", xmlGrafico(grafico))
+            }
         }
         return archivo
     }
@@ -98,7 +114,7 @@ object VentasExcel {
         return hojaXml(filas, anchos)
     }
 
-    private fun hojaResumen(ventas: List<VentaRegistrada>): String {
+    private fun hojaResumen(ventas: List<VentaRegistrada>, grafico: GraficoReporte?): String {
         val porProducto = ventas.groupBy { it.producto }
             .map { (nombre, lista) -> Triple(nombre, lista.sumOf { it.cantidad }, lista.sumOf { it.total }) }
             .sortedByDescending { it.third }
@@ -114,13 +130,31 @@ object VentasExcel {
             Formula("SUM(B2:B$ultima)", porProducto.sumOf { it.second }.toDouble(), NEGRITA),
             Formula("SUM(C2:C$ultima)", porProducto.sumOf { it.third }, DINERO_NEGRITA)
         )
+
+        if (grafico != null) {
+            // Datos del gráfico en las columnas E:F (el gráfico los lee de ahí y se puede editar en Excel)
+            val bloque = mutableListOf<List<Celda?>>()
+            bloque += listOf(Txt("Gráfico", ENCABEZADO), Txt("Unidades", ENCABEZADO))
+            grafico.datos.forEach { (etiqueta, valor) -> bloque += listOf(Txt(etiqueta), Num(valor.toDouble(), ENTERO)) }
+            val total = maxOf(filas.size, bloque.size)
+            val unidas = (0 until total).map { i ->
+                val izquierda = filas.getOrNull(i) ?: emptyList()
+                val relleno: List<Celda?> = List((3 - izquierda.size).coerceAtLeast(0)) { null }
+                izquierda + relleno + listOf<Celda?>(null) + (bloque.getOrNull(i) ?: listOf<Celda?>(null, null))
+            }
+            return hojaXml(unidas, listOf(28, 12, 16, 4, 28, 12), conDibujo = true)
+        }
         return hojaXml(filas, listOf(28, 12, 16))
     }
 
-    private fun hojaXml(filas: List<List<Celda?>>, anchos: List<Int>): String {
+    private fun hojaXml(filas: List<List<Celda?>>, anchos: List<Int>, conDibujo: Boolean = false): String {
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
-        sb.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+        sb.append(
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"" +
+                    (if (conDibujo) " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"" else "") +
+                    ">"
+        )
         sb.append(
             "<sheetViews><sheetView workbookViewId=\"0\">" +
                     "<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>" +
@@ -151,8 +185,128 @@ object VentasExcel {
             }
             sb.append("</row>")
         }
-        sb.append("</sheetData></worksheet>")
+        sb.append("</sheetData>")
+        if (conDibujo) sb.append("<drawing r:id=\"rId1\"/>")
+        sb.append("</worksheet>")
         return sb.toString()
+    }
+
+    // ---------------------------------------------------------------- Excel desde texto (lo usa la IA)
+
+    private val NUMERO = Regex("-?(0|[1-9][0-9]{0,14})(\\.[0-9]+)?")
+    private val PALABRAS_DINERO = listOf("precio", "total", "descuento", "monto", "costo", "importe", "iva", "ganancia")
+
+    /**
+     * Crea un .xlsx con el diseño de Krono (encabezado azul, formato de dinero, filas TOTAL en negrita
+     * con fórmulas SUM, panel congelado y anchos) a partir de hojas ya convertidas a texto.
+     * La IA lo usa cuando no puede editar el Excel original, para que el resultado NUNCA salga sin color.
+     */
+    fun desdeTabla(hojas: List<Pair<String, List<List<String>>>>): ByteArray {
+        val lista = hojas.ifEmpty { listOf("Hoja1" to emptyList()) }
+        val usados = mutableSetOf<String>()
+        val nombres = lista.mapIndexed { i, h -> nombreHojaValido(h.first, usados, i + 1) }
+        val xmlHojas = lista.map { hojaDesdeTabla(it.second) }
+
+        val bos = ByteArrayOutputStream()
+        ZipOutputStream(bos).use { zip ->
+            fun entrada(nombre: String, contenido: String) {
+                zip.putNextEntry(ZipEntry(nombre))
+                zip.write(contenido.toByteArray(Charsets.UTF_8))
+                zip.closeEntry()
+            }
+            entrada("[Content_Types].xml", contentTypesN(lista.size))
+            entrada("_rels/.rels", RELS_RAIZ)
+            entrada("xl/workbook.xml", workbookN(nombres))
+            entrada("xl/_rels/workbook.xml.rels", workbookRelsN(lista.size))
+            entrada("xl/styles.xml", STYLES)
+            xmlHojas.forEachIndexed { i, x -> entrada("xl/worksheets/sheet${i + 1}.xml", x) }
+        }
+        return bos.toByteArray()
+    }
+
+    private fun tipoColumna(encabezado: String): Int {
+        val h = encabezado.lowercase()
+        return when {
+            "ventas" in h -> NORMAL
+            PALABRAS_DINERO.any { it in h } -> DINERO
+            "cant" in h || "unidad" in h -> ENTERO
+            else -> NORMAL
+        }
+    }
+
+    private fun hojaDesdeTabla(filas: List<List<String>>): String {
+        val datos = filas.filter { f -> f.any { it.isNotBlank() } }
+        if (datos.isEmpty()) return hojaXml(emptyList(), emptyList())
+
+        val encabezados = datos.first()
+        val columnas = datos.maxOf { it.size }
+        val tipos = (0 until columnas).map { tipoColumna(encabezados.getOrElse(it) { "" }) }
+
+        val celdas = mutableListOf<List<Celda?>>()
+        celdas += (0 until columnas).map { Txt(encabezados.getOrElse(it) { "" }, ENCABEZADO) }
+
+        datos.drop(1).forEachIndexed { i, fila ->
+            val numFila = i + 2
+            val esTotal = fila.firstOrNull()?.trim().equals("TOTAL", ignoreCase = true)
+            celdas += (0 until columnas).map { c ->
+                val v = fila.getOrElse(c) { "" }.trim()
+                when {
+                    v.isEmpty() -> null
+                    NUMERO.matches(v) -> {
+                        val estilo = when (tipos[c]) {
+                            DINERO -> if (esTotal) DINERO_NEGRITA else DINERO
+                            ENTERO -> if (esTotal) NEGRITA else ENTERO
+                            else -> if (esTotal) NEGRITA else NORMAL
+                        }
+                        if (esTotal && tipos[c] != NORMAL && numFila > 2) {
+                            Formula("SUM(${columna(c)}2:${columna(c)}${numFila - 1})", v.toDouble(), estilo)
+                        } else {
+                            Num(v.toDouble(), estilo)
+                        }
+                    }
+                    else -> Txt(v, if (esTotal) NEGRITA else NORMAL)
+                }
+            }
+        }
+
+        val anchos = (0 until columnas).map { c ->
+            datos.maxOf { it.getOrElse(c) { "" }.length }.coerceIn(10, 40)
+        }
+        return hojaXml(celdas, anchos)
+    }
+
+    private fun nombreHojaValido(crudo: String, usados: MutableSet<String>, numero: Int): String {
+        var nombre = crudo.replace(Regex("""[\\/?*\[\]:]"""), "_").trim().take(31)
+        if (nombre.isBlank()) nombre = "Hoja$numero"
+        var resultado = nombre
+        var n = 2
+        while (!usados.add(resultado.lowercase())) {
+            val sufijo = " ($n)"
+            resultado = nombre.take(31 - sufijo.length) + sufijo
+            n++
+        }
+        return resultado
+    }
+
+    private fun contentTypesN(n: Int): String {
+        val hojas = (1..n).joinToString("") {
+            """<Override PartName="/xl/worksheets/sheet${it}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
+        }
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${hojas}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"""
+    }
+
+    private fun workbookN(nombres: List<String>): String {
+        val hojas = nombres.mapIndexed { i, n ->
+            """<sheet name="${escapar(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>"""
+        }.joinToString("")
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${hojas}</sheets><calcPr fullCalcOnLoad="1"/></workbook>"""
+    }
+
+    private fun workbookRelsN(n: Int): String {
+        val hojas = (1..n).joinToString("") {
+            """<Relationship Id="rId${it}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${it}.xml"/>"""
+        }
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${hojas}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"""
     }
 
     // ---------------------------------------------------------------- utilidades
@@ -179,7 +333,89 @@ object VentasExcel {
         if (v == v.toLong().toDouble()) v.toLong().toString()
         else String.format(Locale.US, "%.4f", v)
 
+    // ---------------------------------------------------------------- gráfico nativo
+
+    /** Gráfico de barras o de pastel que lee sus datos de Resumen!E:F. */
+    private fun xmlGrafico(g: GraficoReporte): String {
+        val n = g.datos.size
+        val ultima = n + 1
+        val categorias = g.datos.mapIndexed { i, d -> "<c:pt idx=\"$i\"><c:v>${escapar(d.first)}</c:v></c:pt>" }.joinToString("")
+        val valores = g.datos.mapIndexed { i, d -> "<c:pt idx=\"$i\"><c:v>${d.second}</c:v></c:pt>" }.joinToString("")
+
+        val serie = "<c:ser><c:idx val=\"0\"/><c:order val=\"0\"/>" +
+                "<c:tx><c:strRef><c:f>Resumen!\$F\$1</c:f><c:strCache><c:ptCount val=\"1\"/>" +
+                "<c:pt idx=\"0\"><c:v>Unidades</c:v></c:pt></c:strCache></c:strRef></c:tx>" +
+                (if (g.esPastel) "" else
+                    "<c:spPr><a:solidFill><a:srgbClr val=\"1677FF\"/></a:solidFill></c:spPr><c:invertIfNegative val=\"0\"/>") +
+                (if (g.esPastel)
+                    "<c:dLbls><c:showLegendKey val=\"0\"/><c:showVal val=\"0\"/><c:showCatName val=\"0\"/>" +
+                            "<c:showSerName val=\"0\"/><c:showPercent val=\"1\"/><c:showBubbleSize val=\"0\"/>" +
+                            "<c:showLeaderLines val=\"1\"/></c:dLbls>"
+                else "") +
+                "<c:cat><c:strRef><c:f>Resumen!\$E\$2:\$E\$$ultima</c:f><c:strCache><c:ptCount val=\"$n\"/>$categorias</c:strCache></c:strRef></c:cat>" +
+                "<c:val><c:numRef><c:f>Resumen!\$F\$2:\$F\$$ultima</c:f><c:numCache><c:formatCode>General</c:formatCode>" +
+                "<c:ptCount val=\"$n\"/>$valores</c:numCache></c:numRef></c:val></c:ser>"
+
+        val trazado = if (g.esPastel) {
+            "<c:pieChart><c:varyColors val=\"1\"/>$serie<c:firstSliceAng val=\"0\"/></c:pieChart>"
+        } else {
+            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>$serie" +
+                    "<c:gapWidth val=\"80\"/><c:axId val=\"111111111\"/><c:axId val=\"222222222\"/></c:barChart>" +
+                    "<c:catAx><c:axId val=\"111111111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling>" +
+                    "<c:delete val=\"0\"/><c:axPos val=\"b\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/>" +
+                    "<c:majorTickMark val=\"out\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>" +
+                    "<c:crossAx val=\"222222222\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/>" +
+                    "<c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>" +
+                    "<c:valAx><c:axId val=\"222222222\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling>" +
+                    "<c:delete val=\"0\"/><c:axPos val=\"l\"/><c:majorGridlines/>" +
+                    "<c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"out\"/>" +
+                    "<c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"111111111\"/>" +
+                    "<c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>"
+        }
+
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" " +
+                "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                "<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>Unidades vendidas por producto</a:t></a:r></a:p>" +
+                "</c:rich></c:tx><c:overlay val=\"0\"/></c:title><c:autoTitleDeleted val=\"0\"/>" +
+                "<c:plotArea><c:layout/>$trazado</c:plotArea>" +
+                (if (g.esPastel) "<c:legend><c:legendPos val=\"r\"/><c:overlay val=\"0\"/></c:legend>" else "") +
+                "<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>"
+    }
+
     // ---------------------------------------------------------------- partes fijas del .xlsx
+
+    private const val TIPOS_GRAFICO =
+        "<Override PartName=\"/xl/drawings/drawing1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>" +
+                "<Override PartName=\"/xl/charts/chart1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawingml.chart+xml\"/>"
+
+    private const val RELS_HOJA_RESUMEN =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" Target=\"../drawings/drawing1.xml\"/>" +
+                "</Relationships>"
+
+    private const val RELS_DIBUJO =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" Target=\"../charts/chart1.xml\"/>" +
+                "</Relationships>"
+
+    // El gráfico se coloca a la derecha de los datos (columnas H a Q, filas 1 a 20)
+    private const val DIBUJO =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" " +
+                "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
+                "<xdr:twoCellAnchor>" +
+                "<xdr:from><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>" +
+                "<xdr:to><xdr:col>16</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>" +
+                "<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"2\" name=\"Grafico 1\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>" +
+                "<xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm>" +
+                "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">" +
+                "<c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" " +
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"rId1\"/>" +
+                "</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"
 
     private const val CONTENT_TYPES =
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +

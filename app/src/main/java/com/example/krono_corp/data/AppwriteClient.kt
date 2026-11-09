@@ -3,6 +3,7 @@ package com.example.krono_corp.data
 import android.content.Context
 import io.appwrite.Client
 import io.appwrite.services.Account
+import io.appwrite.services.Storage
 import io.appwrite.services.TablesDB
 
 /**
@@ -12,6 +13,8 @@ import io.appwrite.services.TablesDB
  * Usamos el servicio "TablesDB" (Tables/Rows), el SDK de Appwrite para Android
  * 13.0.0+ lo trae. El servicio anterior "Databases" (Collections/Documents)
  * sigue funcionando pero Appwrite lo marcó en desuso desde la versión 1.8 del servidor.
+ *
+ * "Storage" guarda los archivos (Excel/PDF) de los reportes que genera la IA.
  */
 object AppwriteClient {
 
@@ -30,6 +33,9 @@ object AppwriteClient {
     lateinit var tablesDB: TablesDB
         private set
 
+    lateinit var storage: Storage
+        private set
+
     fun init(context: Context) {
         if (::client.isInitialized) return
         client = Client(context)
@@ -37,5 +43,6 @@ object AppwriteClient {
             .setProject(PROJECT_ID)
         account = Account(client)
         tablesDB = TablesDB(client)
+        storage = Storage(client)
     }
 }

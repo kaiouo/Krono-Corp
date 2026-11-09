@@ -166,12 +166,9 @@ fun HomeScreen(
                 AccionCardItem("Historial de\nreportes", Icons.Outlined.Description, Color(0xFFF2994A)) {
                     navController.navigate(Screen.HistorialReportes.route)
                 },
-                AccionCardItem("Historial de\nGráficos", Icons.Outlined.BarChart, Color(0xFF27AE60)) {
-                    navController.navigate(Screen.HistorialGraficos.route)
-                },
-                AccionCardItem("Nueva cuenta de\nAdm.", Icons.Outlined.VpnKey, Color(0xFF9B51E0)) {
-                    navController.navigate(Screen.NuevaCuentaAdmin.route)
-                }
+                //AccionCardItem("Nueva cuenta de\nAdm.", Icons.Outlined.VpnKey, Color(0xFF9B51E0)) {
+                //    navController.navigate(Screen.NuevaCuentaAdmin.route)
+                //}
             )
 
             LazyVerticalGrid(

@@ -2,13 +2,19 @@ package com.example.krono_corp.negocio
 
 import android.content.Context
 import com.example.krono_corp.data.AppUser
+import com.example.krono_corp.data.AuthRepository
+import com.example.krono_corp.data.GraficoReporte
 import com.example.krono_corp.data.NuevaVenta
 import com.example.krono_corp.data.PreguntaVenta
+import com.example.krono_corp.data.ReportesRepository
+import com.example.krono_corp.data.Rol
+import com.example.krono_corp.data.SucursalesRepository
 import com.example.krono_corp.data.VentaRegistrada
 import com.example.krono_corp.data.VentasRepository
 import com.example.krono_corp.data.fechaHora
 import com.example.krono_corp.ia.GestorIA
 import com.example.krono_corp.ia.GroqService
+import com.example.krono_corp.reportes.NotificacionesReporte
 import com.example.krono_corp.reportes.VentasExcel
 import com.example.krono_corp.reportes.VentasPdf
 import kotlinx.coroutines.CancellationException
@@ -31,7 +37,11 @@ import java.util.Locale
 //   - eliminar una venta
 // ==============================================================
 
-class RespuestaChat(val texto: String, val archivos: List<File> = emptyList())
+class RespuestaChat(
+    val texto: String,
+    val archivos: List<File> = emptyList(),
+    val grafico: GraficoReporte? = null
+)
 
 class ReporteVentas(
     val titulo: String,
@@ -54,6 +64,8 @@ private class FlujoVenta(val pasos: List<PreguntaVenta>) {
     var descuento = 0.0
     var descuentoTexto = ""
     var sucursal = ""
+    var sucursalId = ""
+    var sucursalFija = false   // el supervisor registra siempre en su sucursal asignada
     var metodoPago = ""
     var nota = ""
     val extras = LinkedHashMap<String, String>()
@@ -78,7 +90,9 @@ private data class Filtros(
 
 private sealed interface Estado {
     class Registrando(val flujo: FlujoVenta) : Estado
-    class ElegirFormato(val filtros: Filtros) : Estado
+    class ElegirFormato(val filtros: Filtros, val tipoGrafico: String?) : Estado
+    // Falta elegir el gráfico (barras o pastel). formatos vacío = reporte dentro del chat, sin archivos
+    class ElegirGrafico(val filtros: Filtros, val formatos: Set<Formato>) : Estado
     class ElegirEliminar(val opciones: List<VentaRegistrada>) : Estado
     class ConfirmarEliminar(val venta: VentaRegistrada) : Estado
 }
@@ -87,9 +101,9 @@ class VentasChat(
     private val usuario: AppUser,
     private val negocio: NegocioData,
     context: Context,
-    /** Se llama cada vez que se exporta un PDF/Excel, para guardarlo en el historial de reportes. */
-    private val alExportar: (titulo: String, contenido: String, archivos: List<File>) -> Unit =
-        { _, _, _ -> },
+    /** Se llama cada vez que se genera un reporte (con o sin PDF/Excel) para guardarlo en el historial. */
+    private val alExportar: (titulo: String, contenido: String, archivos: List<File>, grafico: GraficoReporte?) -> Unit =
+        { _, _, _, _ -> },
     // Item 3: permite agregar una columna/pregunta nueva al registro de ventas (y por lo tanto
     // al Excel exportado) escribiéndolo en el chat, sin entrar a "Mi Negocio".
     private val alGuardarPreguntas: (List<PreguntaVenta>) -> Unit = {}
@@ -115,6 +129,7 @@ class VentasChat(
             return when (actual) {
                 is Estado.Registrando -> responderPaso(actual.flujo, texto)
                 is Estado.ElegirFormato -> elegirFormato(actual, p)
+                is Estado.ElegirGrafico -> elegirGrafico(actual, p)
                 is Estado.ElegirEliminar -> elegirEliminar(actual, p)
                 is Estado.ConfirmarEliminar -> confirmarEliminar(actual, p)
             }
@@ -124,6 +139,7 @@ class VentasChat(
         return when {
             esEliminar(p) -> iniciarEliminar(p)
             esExportar(p) -> exportar(p)
+            esReporte(p) -> iniciarReporte(p)
             esRegistrar(p) -> iniciarRegistro()
             esAgregarColumna(p) -> agregarColumna(texto, p)
             esConsulta(p) -> consultar(texto, p)
@@ -199,13 +215,16 @@ class VentasChat(
     }
 
     private fun agregarColumna(textoOriginal: String, p: String): RespuestaChat {
+        if (usuario.role == Rol.SUPERVISOR) {
+            return RespuestaChat("Solo tu gerente puede agregar o cambiar las preguntas del registro de ventas.")
+        }
         val separador = Regex("\\b(sobre|para|de|que diga|llamada)\\b")
         val despues = separador.find(p)?.range?.last?.plus(1)
         val crudo = if (despues != null) textoOriginal.substring(despues).trim() else ""
         if (crudo.length < 3) {
             return RespuestaChat(
                 "¿Sobre qué quieres la nueva pregunta? Dime, por ejemplo: " +
-                    "«agrega una columna sobre el nombre del cliente»."
+                        "«agrega una columna sobre el nombre del cliente»."
             )
         }
         val etiqueta = crudo.replaceFirstChar { it.uppercase() }.trimEnd('.', '?', '!')
@@ -222,8 +241,8 @@ class VentasChat(
         alGuardarPreguntas(negocio.preguntasVenta.toList())
         return RespuestaChat(
             "Listo ✅ Agregué la pregunta «${nueva.texto}». A partir de ahora te la voy a preguntar " +
-                "cuando registres una venta, y va a salir como columna aparte en el Excel que exportes. " +
-                "También puedes editarla en «Mi Negocio»."
+                    "cuando registres una venta, y va a salir como columna aparte en el Excel que exportes. " +
+                    "También puedes editarla en «Mi Negocio»."
         )
     }
 
@@ -231,6 +250,17 @@ class VentasChat(
         val formato = "excel" in p || "xlsx" in p || "pdf" in p || "hoja de calculo" in p
         val verbo = "export" in p || "descarg" in p || "archivo" in p
         return (formato && ("venta" in p || "reporte" in p || verbo)) || (verbo && "venta" in p)
+    }
+
+    // «genera un reporte», «dame un reporte completo»... (sin pedir Excel/PDF: se muestra en el chat)
+    private fun esReporte(p: String): Boolean =
+        "reporte" in p && listOf("genera", "crea", "dame", "haz", "completo", "quiero", "necesito").any { it in p }
+
+    /** barras o pastel si el usuario ya lo dijo en su mensaje; null si hay que preguntárselo. */
+    private fun tipoGraficoDe(p: String): String? = when {
+        "pastel" in p || "circular" in p || "torta" in p -> ReportesRepository.GRAFICO_PASTEL
+        "barra" in p -> ReportesRepository.GRAFICO_BARRAS
+        else -> null
     }
 
     private fun esConsulta(p: String): Boolean {
@@ -241,9 +271,29 @@ class VentasChat(
     // ------------------------------------------------------------------
     // Registrar venta (conversación guiada)
     // ------------------------------------------------------------------
-    private fun iniciarRegistro(): RespuestaChat {
+    private suspend fun iniciarRegistro(): RespuestaChat {
+        // Perfil fresco: el gerente pudo asignar al supervisor después de iniciar sesión
+        val actual = AuthRepository.currentUser() ?: usuario
+        val esSupervisor = actual.role == Rol.SUPERVISOR && actual.gerenteId.isNotBlank()
+
+        // Las sucursales viven en Appwrite: las del gerente (supervisor) o las propias (dueño)
+        SucursalesRepository.listar(if (esSupervisor) actual.gerenteId else actual.id)
+            .onSuccess { lista ->
+                negocio.sucursales.clear()
+                negocio.sucursales.addAll(lista)
+            }
+
         val pasos = PreguntaVenta.normalizar(negocio.preguntasVenta).filter { it.activa || it.obligatoria }
         val flujo = FlujoVenta(pasos)
+        if (esSupervisor) {
+            negocio.sucursales.firstOrNull {
+                it.id == actual.sucursal || it.nombre.equals(actual.sucursal, ignoreCase = true)
+            }?.let {
+                flujo.sucursal = it.nombre
+                flujo.sucursalId = it.id
+                flujo.sucursalFija = true
+            }
+        }
         estado = Estado.Registrando(flujo)
         val encabezado = "Perfecto, vamos a registrar una venta. (Escribe «cancelar» en cualquier momento para salir.)\n\n"
         val primera = avanzar(flujo)
@@ -277,7 +327,7 @@ class VentasChat(
         // Si no hay sucursales activas, esa pregunta se omite
         while (f.indice < f.pasos.size &&
             f.pasos[f.indice].id == PreguntaVenta.SUCURSAL &&
-            opcionesSucursal().isEmpty()
+            (f.sucursalFija || opcionesSucursal().isEmpty())
         ) f.indice++
 
         if (f.indice < f.pasos.size) return RespuestaChat(preguntaActual(f))
@@ -328,6 +378,7 @@ class VentasChat(
             PreguntaVenta.SUCURSAL -> {
                 f.sucursal = if (omitir) "" else resolverOpcion(e, opcionesSucursal())
                     ?: return RespuestaChat("No reconocí la sucursal.\n\n" + preguntaActual(f))
+                f.sucursalId = negocio.sucursales.firstOrNull { it.nombre == f.sucursal }?.id ?: ""
             }
             PreguntaVenta.METODO_PAGO -> {
                 f.metodoPago = if (omitir) "" else resolverOpcion(e, METODOS_PAGO)
@@ -378,7 +429,7 @@ class VentasChat(
             nota = f.nota,
             extras = f.extras.toMap()
         )
-        return VentasRepository.guardar(usuario, nueva).fold(
+        return VentasRepository.guardar(usuario, nueva, f.sucursalId).fold(
             onSuccess = {
                 estado = null
                 RespuestaChat(
@@ -488,13 +539,13 @@ class VentasChat(
         val filtros = filtrosDe(p, todas)
         val formatos = formatosDe(p)
         if (formatos.isEmpty()) {
-            estado = Estado.ElegirFormato(filtros)
+            estado = Estado.ElegirFormato(filtros, tipoGraficoDe(p))
             return RespuestaChat(
                 "¿En qué formato quieres las ventas ${filtros.descripcion()}? " +
                         "Responde «Excel», «PDF» o «ambos»."
             )
         }
-        return generarArchivos(filtros, formatos, todas)
+        return conGrafico(tipoGraficoDe(p), filtros, formatos, todas)
     }
 
     private suspend fun elegirFormato(e: Estado.ElegirFormato, p: String): RespuestaChat {
@@ -503,7 +554,75 @@ class VentasChat(
         estado = null
         val todas = VentasRepository.listar(usuario.id)
             .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
-        return generarArchivos(e.filtros, formatos, todas)
+        return conGrafico(e.tipoGrafico ?: tipoGraficoDe(p), e.filtros, formatos, todas)
+    }
+
+    // ------------------------------------------------------------------
+    // Reporte completo: texto + gráfico de barras o de pastel
+    // ------------------------------------------------------------------
+    private suspend fun iniciarReporte(p: String): RespuestaChat {
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        if (todas.isEmpty()) {
+            return RespuestaChat("Aún no tienes ventas registradas para el reporte. Escribe «registrar venta» para empezar.")
+        }
+        return conGrafico(tipoGraficoDe(p), filtrosDe(p, todas), emptySet(), todas)
+    }
+
+    /** Si ya se sabe el tipo de gráfico genera; si no, lo pregunta (barras o pastel). */
+    private suspend fun conGrafico(
+        tipo: String?,
+        filtros: Filtros,
+        formatos: Set<Formato>,
+        todas: List<VentaRegistrada>
+    ): RespuestaChat {
+        val ventas = aplicar(filtros, todas)
+        if (ventas.isEmpty()) return RespuestaChat("No encontré ventas ${filtros.descripcion()} para el reporte.")
+        if (tipo == null) {
+            estado = Estado.ElegirGrafico(filtros, formatos)
+            return RespuestaChat("¿Qué gráfico quieres en el reporte: de «barras» o de «pastel»?")
+        }
+        return if (formatos.isEmpty()) reporteEnChat(filtros, tipo, ventas)
+        else generarArchivos(filtros, formatos, todas, tipo)
+    }
+
+    private suspend fun elegirGrafico(e: Estado.ElegirGrafico, p: String): RespuestaChat {
+        val tipo = tipoGraficoDe(p) ?: return RespuestaChat("Responde «barras» o «pastel» (o «cancelar»).")
+        estado = null
+        val todas = VentasRepository.listar(usuario.id)
+            .getOrElse { return RespuestaChat(it.message ?: "No pude leer tus ventas.") }
+        return conGrafico(tipo, e.filtros, e.formatos, todas)
+    }
+
+    private fun graficoDe(tipo: String, ventas: List<VentaRegistrada>) = GraficoReporte(
+        tipo = tipo,
+        datos = ventas.groupBy { it.producto }
+            .map { (nombre, lista) -> nombre to lista.sumOf { it.cantidad } }
+            .sortedByDescending { it.second }
+            .take(6)
+    )
+
+    private fun reporteEnChat(f: Filtros, tipo: String, ventas: List<VentaRegistrada>): RespuestaChat {
+        val porProducto = ventas.groupBy { it.producto }
+            .map { (n, l) -> Triple(n, l.sumOf { it.cantidad }, l.sumOf { it.total }) }
+            .sortedByDescending { it.second }
+        val contenido = buildString {
+            appendLine("Reporte de ventas ${f.descripcion()}:")
+            porProducto.forEach { appendLine("• ${it.first}: ${it.second} unidades — ${dinero(it.third)}") }
+            append("Total vendido: ${dinero(ventas.sumOf { it.total })} en ${ventas.size} venta(s)")
+        }
+        val grafico = graficoDe(tipo, ventas)
+        alExportar("Reporte de ventas ${f.descripcion()}", contenido, emptyList(), grafico)
+        NotificacionesReporte.avisar(
+            appContext,
+            "Reporte generado",
+            "Tu reporte de ventas ${f.descripcion()} con gráfico está en el historial de reportes."
+        )
+        val nombre = if (grafico.esPastel) "pastel" else "barras"
+        return RespuestaChat(
+            "Listo ✅ Generé el reporte con gráfico de $nombre y lo guardé en el historial de reportes.\n\n$contenido",
+            grafico = grafico
+        )
     }
 
     private fun formatosDe(p: String): Set<Formato> = buildSet {
@@ -518,16 +637,18 @@ class VentasChat(
     private suspend fun generarArchivos(
         f: Filtros,
         formatos: Set<Formato>,
-        todas: List<VentaRegistrada>
+        todas: List<VentaRegistrada>,
+        tipoGrafico: String
     ): RespuestaChat {
         val ventas = aplicar(f, todas)
         if (ventas.isEmpty()) return RespuestaChat("No encontré ventas ${f.descripcion()} para exportar.")
+        val grafico = graficoDe(tipoGrafico, ventas)
         return try {
             val archivos = withContext(Dispatchers.IO) {
                 buildList {
-                    if (Formato.EXCEL in formatos) add(VentasExcel.generar(appContext, ventas, f.descripcion()))
+                    if (Formato.EXCEL in formatos) add(VentasExcel.generar(appContext, ventas, f.descripcion(), grafico))
                     if (Formato.PDF in formatos) {
-                        add(VentasPdf.generar(appContext, ventas, f.descripcion(), usuario.alias, negocio.nombreNegocio))
+                        add(VentasPdf.generar(appContext, ventas, f.descripcion(), usuario.alias, negocio.nombreNegocio, grafico))
                     }
                 }
             }
@@ -538,10 +659,20 @@ class VentasChat(
             alExportar(
                 "Ventas ${f.descripcion()} (${archivos.joinToString(" y ") { it.extension.uppercase() }})",
                 resumen,
-                archivos
+                archivos,
+                grafico
             )
 
-            RespuestaChat("Listo ✅ $resumen Lo guardé en el historial de reportes.", archivos)
+            // Notificación: toca para abrir el archivo
+            val tipos = archivos.joinToString(" y ") { if (it.extension.equals("pdf", true)) "PDF" else "Excel" }
+            NotificacionesReporte.avisar(
+                appContext,
+                "Reporte listo",
+                "Tu reporte en $tipos (${f.descripcion()}) está listo. Toca para abrirlo.",
+                archivos.firstOrNull()
+            )
+
+            RespuestaChat("Listo ✅ $resumen Lo guardé en el historial de reportes.", archivos, grafico)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

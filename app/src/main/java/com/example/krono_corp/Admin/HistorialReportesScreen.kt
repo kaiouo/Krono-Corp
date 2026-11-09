@@ -29,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,8 +38,15 @@ import com.example.krono_corp.data.CuentaSupervisor
 import com.example.krono_corp.data.GerenteRepository
 import com.example.krono_corp.data.ReporteRemoto
 import com.example.krono_corp.data.ReportesRepository
-import com.example.krono_corp.negocio.MiniBarChart
+import com.example.krono_corp.data.graficoMostrado
+import com.example.krono_corp.negocio.GraficoReporteView
+import com.example.krono_corp.reportes.abrirDescarga
+import com.example.krono_corp.reportes.compartirDescarga
+import com.example.krono_corp.reportes.guardarDescarga
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Reportes y gráficos que generan los supervisores del gerente (tabla "reportes").
@@ -56,6 +64,29 @@ fun HistorialReportesScreen(usuario: AppUser) {
     var seleccionado by remember { mutableStateOf<ReporteRemoto?>(null) }
     var recarga by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var descargando by remember { mutableStateOf<String?>(null) }
+
+    fun bajarArchivo(archivoId: String, nombre: String, compartir: Boolean) {
+        if (descargando != null) return
+        scope.launch {
+            descargando = nombre
+            error = null
+            ReportesRepository.descargar(archivoId)
+                .onSuccess { bytes ->
+                    try {
+                        val guardado = withContext(Dispatchers.IO) { guardarDescarga(context, nombre, bytes) }
+                        if (compartir) compartirDescarga(context, guardado) else abrirDescarga(context, guardado)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        error = e.message ?: "No se pudo guardar el archivo."
+                    }
+                }
+                .onFailure { error = it.message }
+            descargando = null
+        }
+    }
 
     LaunchedEffect(recarga) {
         cargando = true
@@ -169,17 +200,19 @@ fun HistorialReportesScreen(usuario: AppUser) {
 
         items(filtrados, key = { it.id }) { r ->
             val sucursal = supervisores.firstOrNull { it.id == r.supervisorId }?.sucursal.orEmpty()
+            val graficoR = r.graficoMostrado()
+            val etiquetaTipo = when {
+                r.tipo == ReportesRepository.TIPO_GRAFICO -> "GRÁFICO"
+                graficoR != null -> "REPORTE · GRÁFICO DE ${graficoR.nombreTipo.uppercase()}"
+                else -> "REPORTE"
+            }
             TarjetaBlanca {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        if (r.tipo == ReportesRepository.TIPO_GRAFICO) "GRÁFICO" else "REPORTE",
-                        fontSize = 11.sp,
-                        color = AdminGris
-                    )
+                    Text(etiquetaTipo, fontSize = 11.sp, color = AdminGris)
                     Etiqueta(
                         r.estado,
                         if (r.estado == ReportesRepository.ESTADO_REVISADO) AdminVerde else AdminNaranja
@@ -207,13 +240,39 @@ fun HistorialReportesScreen(usuario: AppUser) {
                     Text("Generado: ${r.fecha}", fontSize = 13.sp, color = AdminGris)
                     Text("Estado: ${r.estado}", fontSize = 13.sp, color = AdminGris)
                     Spacer(Modifier.height(10.dp))
-                    if (r.tipo == ReportesRepository.TIPO_GRAFICO) {
-                        val datos = ReportesRepository.decodificarDatos(r.contenido)
-                        MiniBarChart(datos = datos, altura = 110)
-                        Spacer(Modifier.height(10.dp))
-                        datos.forEach { (etiqueta, valor) -> Text("• $etiqueta: $valor", fontSize = 13.sp) }
-                    } else {
+                    // Filas antiguas de tipo GRAFICO guardaban solo los datos, sin texto
+                    if (r.tipo != ReportesRepository.TIPO_GRAFICO) {
                         Text(r.contenido, fontSize = 13.sp)
+                    }
+                    r.graficoMostrado()?.let { g ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Gráfico de ${g.nombreTipo.lowercase()}: unidades por producto",
+                            fontSize = 12.sp,
+                            color = AdminGris
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        GraficoReporteView(grafico = g, altura = 110)
+                        Spacer(Modifier.height(10.dp))
+                        g.datos.forEach { (etiqueta, valor) -> Text("• $etiqueta: $valor", fontSize = 13.sp) }
+                    }
+                    if (r.archivoIds.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Archivos", fontSize = 12.sp, color = AdminGris)
+                        r.archivoIds.forEachIndexed { i, id ->
+                            val nombre = r.archivoNombres.getOrElse(i) { "reporte_${i + 1}" }
+                            Text(nombre, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Row {
+                                TextButton(
+                                    enabled = descargando == null,
+                                    onClick = { bajarArchivo(id, nombre, compartir = false) }
+                                ) { Text(if (descargando == nombre) "Descargando…" else "Descargar y abrir") }
+                                TextButton(
+                                    enabled = descargando == null,
+                                    onClick = { bajarArchivo(id, nombre, compartir = true) }
+                                ) { Text("Compartir") }
+                            }
+                        }
                     }
                 }
             },

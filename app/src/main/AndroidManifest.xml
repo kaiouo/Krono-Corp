@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -25,13 +26,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Enlaces de los correos de Appwrite: recuperar contraseña y verificar el email -->
+            <!-- Enlaces: recuperar contraseña, verificar el email e invitación de supervisor (registro) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="kronocorp" android:host="recovery" />
                 <data android:scheme="kronocorp" android:host="verify" />
+                <data android:scheme="kronocorp" android:host="registro" />
             </intent-filter>
         </activity>
 

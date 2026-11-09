@@ -1,6 +1,9 @@
 package com.example.krono_corp.Admin
 
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +28,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -56,6 +62,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
@@ -64,12 +71,17 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.CuentaSupervisor
 import com.example.krono_corp.data.GerenteRepository
+import com.example.krono_corp.data.GraficoReporte
+import com.example.krono_corp.data.ReportesRepository
 import com.example.krono_corp.data.VentaRegistrada
 import com.example.krono_corp.data.VentasEquipoRepository
 import com.example.krono_corp.data.fechaHora
+import com.example.krono_corp.ia.AdjuntosIA
+import com.example.krono_corp.ia.ArchivoAdjunto
 import com.example.krono_corp.ia.GestorIA
 import com.example.krono_corp.ia.GroqService
-import com.example.krono_corp.negocio.MiniBarChart
+import com.example.krono_corp.negocio.GraficoReporteView
+import com.example.krono_corp.reportes.NotificacionesReporte
 import com.example.krono_corp.reportes.VentasExcel
 import com.example.krono_corp.reportes.VentasPdf
 import com.example.krono_corp.reportes.abrirArchivo
@@ -105,12 +117,16 @@ data class MensajeChat(
     val texto: String,
     val esUsuario: Boolean,
     val archivos: List<File> = emptyList(),
-    val grafico: List<Pair<String, Int>>? = null
+    val grafico: GraficoReporte? = null,
+    val adjuntoNombre: String? = null
 )
 
 enum class FormatoReporte { EXCEL, PDF }
 
 private class Periodo(val desde: LocalDateTime?, val hasta: LocalDateTime?, val nombre: String)
+
+// Petición de gráfico/exportación que espera la respuesta «barras» o «pastel»
+private class PendienteGrafico(val p: String, val esExport: Boolean)
 
 // ---------------------------------------------------------------
 // ViewModel: guarda el chat aunque cambies de pestaña en el panel
@@ -128,6 +144,32 @@ class AsistenteViewModel : ViewModel() {
     private var iniciado = false
     private var gerenteId = ""
     private var alias = ""
+    private var pendiente: PendienteGrafico? = null
+
+    /** Archivo que el gerente adjuntó y todavía no ha enviado */
+    var adjunto by mutableStateOf<ArchivoAdjunto?>(null)
+        private set
+
+    fun adjuntar(context: Context, uri: Uri) {
+        val app = context.applicationContext
+        viewModelScope.launch {
+            AdjuntosIA.leer(app, uri)
+                .onSuccess { leido ->
+                    adjunto = leido
+                    if (leido.truncado) {
+                        bot(
+                            "«${leido.nombre}» es muy largo: solo leí los primeros ${AdjuntosIA.MAX_CARACTERES} " +
+                                    "caracteres. Puedo analizarlo, pero para editarlo súbelo más corto."
+                        )
+                    }
+                }
+                .onFailure { bot(it.message ?: "No pude leer el archivo.") }
+        }
+    }
+
+    fun quitarAdjunto() {
+        adjunto = null
+    }
 
     fun iniciar(usuario: AppUser) {
         if (iniciado) return
@@ -146,14 +188,21 @@ class AsistenteViewModel : ViewModel() {
     private fun bot(
         texto: String,
         archivos: List<File> = emptyList(),
-        grafico: List<Pair<String, Int>>? = null
+        grafico: GraficoReporte? = null
     ) {
         mensajes.add(MensajeChat(texto, esUsuario = false, archivos = archivos, grafico = grafico))
     }
 
-    private fun ejecutar(estado: String, accionUsuario: String?, bloque: suspend () -> Unit) {
+    private fun ejecutar(
+        estado: String,
+        accionUsuario: String?,
+        adjuntoNombre: String? = null,
+        bloque: suspend () -> Unit
+    ) {
         if (ocupado != null) return
-        accionUsuario?.let { mensajes.add(MensajeChat(it, esUsuario = true)) }
+        accionUsuario?.let {
+            mensajes.add(MensajeChat(it, esUsuario = true, adjuntoNombre = adjuntoNombre))
+        }
         viewModelScope.launch {
             ocupado = estado
             try {
@@ -203,20 +252,112 @@ class AsistenteViewModel : ViewModel() {
     // ---------- Chat: reparte según lo que pide el gerente ----------
 
     fun preguntar(texto: String, context: Context) {
+        val adj = adjunto
+        if (adj != null) {
+            preguntarConArchivo(texto, adj, context)
+            return
+        }
         val pregunta = texto.trim()
         if (pregunta.isEmpty()) return
         val app = context.applicationContext
         val p = normalizar(pregunta)
 
         ejecutar("Krono está trabajando…", pregunta) {
+            val espera = pendiente
             when {
-                esExportar(p) -> exportar(p, app)
-                "grafic" in p -> grafico(p)
+                // Krono está esperando «barras» o «pastel» para terminar la petición anterior
+                espera != null && esCancelar(p) -> {
+                    pendiente = null
+                    bot("Listo, lo cancelé. ¿En qué más te ayudo?")
+                }
+                espera != null -> {
+                    val tipo = tipoGraficoDe(p)
+                    if (tipo == null) {
+                        bot("Responde «barras» o «pastel» (o «cancelar»).")
+                    } else {
+                        pendiente = null
+                        if (espera.esExport) exportar(espera.p, app, tipo) else grafico(espera.p, tipo)
+                    }
+                }
+                esExportar(p) -> pedirGrafico(p, esExport = true, app = app)
+                "grafic" in p -> pedirGrafico(p, esExport = false, app = app)
                 esVentas(p) -> responderVentas(pregunta, p)
                 else -> gestor.procesarPregunta(pregunta)
                     .onSuccess { bot(it) }
                     .onFailure { bot("No pude responder en este momento. ${it.message}") }
             }
+        }
+    }
+
+    /** Si el gerente ya dijo «barras» o «pastel» sigue; si no, se lo pregunta. */
+    private suspend fun pedirGrafico(p: String, esExport: Boolean, app: Context) {
+        val tipo = tipoGraficoDe(p)
+        if (tipo != null) {
+            if (esExport) exportar(p, app, tipo) else grafico(p, tipo)
+        } else {
+            pendiente = PendienteGrafico(p, esExport)
+            bot("¿Qué gráfico quieres: de «barras» o de «pastel»?")
+        }
+    }
+
+    // ---------- Archivo adjunto: analizar o editar con la IA ----------
+
+    private fun preguntarConArchivo(texto: String, adj: ArchivoAdjunto, context: Context) {
+        if (ocupado != null) return
+        val app = context.applicationContext
+        val instruccion = texto.trim().ifEmpty { "Resume este archivo y dime qué se podría mejorar." }
+        adjunto = null
+        ejecutar("Krono está leyendo ${adj.nombre}…", instruccion, adj.nombre) {
+            procesarArchivo(adj, instruccion, app)
+        }
+    }
+
+    private suspend fun procesarArchivo(adj: ArchivoAdjunto, instruccion: String, app: Context) {
+        var respuesta = groq.enviar(emptyList(), AdjuntosIA.construirPrompt(adj, instruccion)).getOrElse {
+            bot("No pude procesar el archivo en este momento. ${it.message}")
+            return
+        }
+        var r = AdjuntosIA.separarRespuesta(respuesta)
+
+        // La IA a veces dice que editó pero no devuelve el archivo: se lo pido una vez más
+        if (r.contenido == null && !r.incompleto && !adj.truncado && AdjuntosIA.pareceEdicion(instruccion)) {
+            groq.enviar(emptyList(), AdjuntosIA.construirReintento(adj, instruccion)).getOrNull()?.let { segunda ->
+                val r2 = AdjuntosIA.separarRespuesta(segunda)
+                if (r2.contenido != null || r2.incompleto) {
+                    respuesta = segunda
+                    r = r2
+                }
+            }
+        }
+
+        val resp = r
+        val contenido = resp.contenido
+        when {
+            contenido != null && !adj.truncado -> {
+                val res = withContext(Dispatchers.IO) { AdjuntosIA.editar(app, adj, contenido) }
+                val cambios = res.cambios
+                if (cambios != null && cambios.isEmpty()) {
+                    res.archivo.delete()
+                    bot(
+                        "No hice ningún cambio: el archivo que devolvió la IA es idéntico al original. " +
+                                "Prueba siendo más específico, por ejemplo: «en la hoja Ventas cambia el valor de B3 a 120»."
+                    )
+                } else {
+                    bot(
+                        resp.texto.ifBlank { "Listo, edité «${adj.nombre}»." } + AdjuntosIA.resumenCambios(res),
+                        archivos = listOf(res.archivo)
+                    )
+                }
+            }
+            resp.incompleto -> bot(
+                "La respuesta se cortó antes de terminar el archivo, así que no lo guardé para no perder datos. " +
+                        "Prueba con un archivo más corto o pide cambios más pequeños."
+            )
+            AdjuntosIA.pareceEdicion(instruccion) && !adj.truncado -> bot(
+                "No pude aplicar los cambios: la IA no devolvió el archivo editado, así que no modifiqué nada. " +
+                        "Intenta de nuevo con una instrucción más concreta."
+            )
+            else -> bot(resp.texto.ifBlank { respuesta.trim() })
         }
     }
 
@@ -273,7 +414,7 @@ class AsistenteViewModel : ViewModel() {
 
     // ---------- Gráfico ----------
 
-    private suspend fun grafico(p: String) {
+    private suspend fun grafico(p: String, tipo: String) {
         val (sups, todas) = cargarVentas() ?: return
         val periodo = periodoDe(p)
         val ventas = filtrar(todas, periodo)
@@ -287,7 +428,7 @@ class AsistenteViewModel : ViewModel() {
                 .map { (nombre, lista) -> nombre to lista.sumOf { it.cantidad } }
                 .sortedByDescending { it.second }
                 .take(6)
-            bot("Unidades vendidas por producto ${periodo.nombre}:", grafico = datos)
+            bot("Unidades vendidas por producto ${periodo.nombre}:", grafico = GraficoReporte(tipo, datos))
         } else {
             val datos = sups
                 .map { s ->
@@ -296,13 +437,13 @@ class AsistenteViewModel : ViewModel() {
                 .filter { it.second > 0 }
                 .sortedByDescending { it.second }
                 .take(6)
-            bot("Ventas por supervisor ${periodo.nombre} (en dólares):", grafico = datos)
+            bot("Ventas por supervisor ${periodo.nombre} (en dólares):", grafico = GraficoReporte(tipo, datos))
         }
     }
 
     // ---------- Exportar a Excel / PDF ----------
 
-    private suspend fun exportar(p: String, app: Context) {
+    private suspend fun exportar(p: String, app: Context, tipo: String) {
         val (sups, todas) = cargarVentas() ?: return
         val periodo = periodoDe(p)
         val ventas = filtrar(todas, periodo)
@@ -321,20 +462,37 @@ class AsistenteViewModel : ViewModel() {
             }
         }
 
+        // Gráfico del reporte (barras o pastel): unidades vendidas por producto
+        val grafico = GraficoReporte(
+            tipo,
+            ventas.groupBy { it.producto }
+                .map { (nombre, lista) -> nombre to lista.sumOf { it.cantidad } }
+                .sortedByDescending { it.second }
+                .take(6)
+        )
+
         try {
             val archivos = withContext(Dispatchers.IO) {
                 buildList {
-                    if (FormatoReporte.EXCEL in formatos) add(VentasExcel.generar(app, ventas, periodo.nombre))
+                    if (FormatoReporte.EXCEL in formatos) add(VentasExcel.generar(app, ventas, periodo.nombre, grafico))
                     if (FormatoReporte.PDF in formatos) {
-                        add(VentasPdf.generar(app, ventas, periodo.nombre, alias, "KronoCorp"))
+                        add(VentasPdf.generar(app, ventas, periodo.nombre, alias, "KronoCorp", grafico))
                     }
                 }
             }
+            val tipos = archivos.joinToString(" y ") { if (it.extension.equals("pdf", true)) "PDF" else "Excel" }
+            NotificacionesReporte.avisar(
+                app,
+                "Reporte listo",
+                "Tu reporte en $tipos (${periodo.nombre}) está listo. Toca para abrirlo.",
+                archivos.firstOrNull()
+            )
             val conVentas = ventas.map { it.usuarioId }.distinct().size
             bot(
                 "Listo ✅ Exporté ${ventas.size} venta(s) ${periodo.nombre} de $conVentas de " +
                         "${sups.size} supervisor(es). Total: ${dinero(ventas.sumOf { it.total })}.",
-                archivos = archivos
+                archivos = archivos,
+                grafico = grafico
             )
         } catch (e: CancellationException) {
             throw e
@@ -415,6 +573,15 @@ class AsistenteViewModel : ViewModel() {
 
     // ---------- Intenciones y periodos ----------
 
+    private fun esCancelar(p: String) = p == "no" || p.startsWith("cancel")
+
+    /** barras o pastel si el gerente ya lo dijo en su mensaje; null si hay que preguntárselo. */
+    private fun tipoGraficoDe(p: String): String? = when {
+        "pastel" in p || "circular" in p || "torta" in p -> ReportesRepository.GRAFICO_PASTEL
+        "barra" in p -> ReportesRepository.GRAFICO_BARRAS
+        else -> null
+    }
+
     private fun esExportar(p: String) =
         "exporta" in p || "excel" in p || "xlsx" in p || "pdf" in p || "descarga" in p ||
                 ("reporte" in p && ("genera" in p || "crea" in p || "dame" in p))
@@ -476,9 +643,14 @@ fun AsistenteIAScreen(
     }
 
     val libre = vm.ocupado == null
+    val puedeEnviar = libre && (texto.isNotBlank() || vm.adjunto != null)
+
+    val selectorArchivo = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.adjuntar(context, uri) }
 
     fun enviar() {
-        if (texto.isBlank() || !libre) return
+        if (!puedeEnviar) return
         vm.preguntar(texto, context)
         texto = ""
     }
@@ -558,45 +730,69 @@ fun AsistenteIAScreen(
             }
         }
 
-        // Barra para escribir
-        Row(
+        // Barra para escribir (con clip para adjuntar archivos)
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.White)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedTextField(
-                value = texto,
-                onValueChange = { texto = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Escríbele a Krono…", fontSize = 13.sp) },
-                singleLine = true,
-                shape = RoundedCornerShape(20.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { enviar() }),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = Fondo,
-                    focusedContainerColor = Color.White,
-                    unfocusedBorderColor = BordeClaro,
-                    focusedBorderColor = Azul
-                )
-            )
-            Spacer(Modifier.width(8.dp))
-            IconButton(
-                onClick = { enviar() },
-                enabled = libre && texto.isNotBlank(),
+            vm.adjunto?.let { adj ->
+                ChipAdjuntoAdmin(nombre = adj.nombre, alQuitar = { vm.quitarAdjunto() })
+            }
+            Row(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (libre && texto.isNotBlank()) Azul else BordeClaro)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Enviar",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                IconButton(
+                    onClick = { selectorArchivo.launch(arrayOf("*/*")) },
+                    enabled = libre,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AttachFile,
+                        contentDescription = "Adjuntar archivo",
+                        tint = if (libre) Azul else BordeClaro
+                    )
+                }
+                OutlinedTextField(
+                    value = texto,
+                    onValueChange = { texto = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = {
+                        Text(
+                            if (vm.adjunto != null) "¿Qué hago con el archivo?" else "Escríbele a Krono…",
+                            fontSize = 13.sp
+                        )
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(20.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { enviar() }),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = Fondo,
+                        focusedContainerColor = Color.White,
+                        unfocusedBorderColor = BordeClaro,
+                        focusedBorderColor = Azul
+                    )
                 )
+                Spacer(Modifier.width(8.dp))
+                IconButton(
+                    onClick = { enviar() },
+                    enabled = puedeEnviar,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (puedeEnviar) Azul else BordeClaro)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Enviar",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }
@@ -669,17 +865,28 @@ private fun BurbujaChat(
                     .padding(12.dp)
             ) {
                 Column {
+                    mensaje.adjuntoNombre?.let { nombre ->
+                        Text(
+                            text = "📎 $nombre",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.size(4.dp))
+                    }
                     Text(
                         text = if (mensaje.esUsuario) mensaje.texto else limpiarMarkdown(mensaje.texto),
                         fontSize = 13.sp,
                         color = if (mensaje.esUsuario) Color.White else TextoOscuro
                     )
-                    mensaje.grafico?.let { datos ->
+                    mensaje.grafico?.let { grafico ->
                         Spacer(Modifier.size(10.dp))
-                        MiniBarChart(datos = datos, altura = 110)
+                        GraficoReporteView(grafico = grafico, altura = 110)
                     }
                     mensaje.archivos.forEach { archivo ->
-                        val tipo = if (archivo.extension.equals("pdf", ignoreCase = true)) "PDF" else "Excel"
+                        val tipo = AdjuntosIA.etiquetaTipo(archivo)
                         Row {
                             TextButton(onClick = { alAbrir(archivo) }) { Text("Abrir $tipo") }
                             TextButton(onClick = { alCompartir(archivo) }) { Text("Compartir") }
@@ -687,6 +894,32 @@ private fun BurbujaChat(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ChipAdjuntoAdmin(nombre: String, alQuitar: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Fondo)
+            .padding(start = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Description, contentDescription = null, tint = Azul, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = nombre,
+            fontSize = 12.sp,
+            color = TextoOscuro,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 240.dp)
+        )
+        IconButton(onClick = alQuitar, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Close, contentDescription = "Quitar archivo", tint = Gris, modifier = Modifier.size(16.dp))
         }
     }
 }

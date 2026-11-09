@@ -1,5 +1,7 @@
 package com.example.krono_corp.negocio
 
+import androidx.compose.runtime.mutableStateListOf
+import com.example.krono_corp.data.GraficoReporte
 import com.example.krono_corp.data.PreguntaVenta
 
 sealed class Screen(val route: String) {
@@ -30,7 +32,13 @@ data class ReporteGenerado(
     val titulo: String,
     val fecha: String,
     val contenido: String,
-    val archivos: List<String> = emptyList()
+    // Rutas locales de los archivos recién generados en esta sesión
+    val archivos: List<String> = emptyList(),
+    // Archivos ya guardados en el bucket de Appwrite (mismo orden que los nombres)
+    val archivoIds: List<String> = emptyList(),
+    val archivoNombres: List<String> = emptyList(),
+    // Gráfico (barras o pastel) que acompaña al reporte, si lo lleva
+    val grafico: GraficoReporte? = null
 )
 
 data class GraficoGenerado(
@@ -57,7 +65,8 @@ data class NegocioData(
         SucursalItem("SUC-2", "Sucursal 2 - Los Próceres", true, "5678")
     ),
     // Modulo de Persona 4
-    val historialReportes: MutableList<ReporteGenerado> = mutableListOf(),
+    // Lista observable: la pantalla del historial se actualiza sola cuando cambia
+    val historialReportes: MutableList<ReporteGenerado> = mutableStateListOf(),
     val historialGraficos: MutableList<GraficoGenerado> = mutableListOf(),
     val cuentasAdicionales: MutableList<CuentaAdministracion> = mutableListOf(),
     // Preguntas que la IA hace al registrar una venta (se editan en MiNegocioScreen)

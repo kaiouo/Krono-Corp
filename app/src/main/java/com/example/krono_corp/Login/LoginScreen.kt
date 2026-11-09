@@ -22,13 +22,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.AuthRepository
 import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(
-    onLoginSuccess: (AppUser) -> Unit,
+    // Se llama cuando correo + contraseña son correctos y ya se envió el código al correo
+    onCodigoEnviado: (userId: String, email: String) -> Unit,
     onGoToRegister: () -> Unit,
     onForgotPassword: () -> Unit = {}
 ) {
@@ -39,6 +39,7 @@ fun LoginScreen(
     val scope = rememberCoroutineScope()
 
     fun iniciarSesion() {
+        if (cargando) return
         error = when {
             correo.isBlank() || clave.isBlank() -> "Completa todos los campos."
             !esCorreoValido(correo) -> "Ingresa un correo válido."
@@ -48,8 +49,8 @@ fun LoginScreen(
 
         scope.launch {
             cargando = true
-            AuthRepository.login(correo.trim(), clave).fold(
-                onSuccess = { onLoginSuccess(it) },
+            AuthRepository.iniciarLogin(correo.trim(), clave).fold(
+                onSuccess = { onCodigoEnviado(it.userId, it.email) },
                 onFailure = { error = it.message }
             )
             cargando = false

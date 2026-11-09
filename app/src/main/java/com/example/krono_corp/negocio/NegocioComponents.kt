@@ -1,6 +1,7 @@
 package com.example.krono_corp.negocio
 
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,6 +21,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import com.example.krono_corp.data.GraficoReporte
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,10 +45,12 @@ fun KronoBottomBar(
 ) {
     val context = LocalContext.current
 
+    // Sin altura fija: NavigationBar ya calcula su alto (80dp) MÁS el espacio de la barra de
+    // navegación del sistema (botones o gestos). Con height(72.dp) ese espacio se comía el
+    // contenido y los iconos/etiquetas quedaban cortados arriba y abajo.
     NavigationBar(
         containerColor = Color.White,
-        tonalElevation = 8.dp,
-        modifier = Modifier.height(72.dp)
+        tonalElevation = 8.dp
     ) {
         val items = listOf(
             Triple("Home", Icons.Outlined.Home, Screen.Home.route),
@@ -223,4 +228,73 @@ fun MiniBarChart(
             }
         }
     }
+}
+
+// Colores de las porciones del pastel
+val KronoPaleta = listOf(
+    Color(0xFF007AFF), Color(0xFF27AE60), Color(0xFFF2994A),
+    Color(0xFF9B51E0), Color(0xFFEB5757), Color(0xFF56CCF2)
+)
+
+// Gráfico de pastel con leyenda (etiqueta, valor y porcentaje), sin librerías externas.
+@Composable
+fun MiniPieChart(
+    datos: List<Pair<String, Int>>,
+    modifier: Modifier = Modifier,
+    diametro: Int = 120
+) {
+    val total = datos.sumOf { it.second }.coerceAtLeast(1)
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Canvas(modifier = Modifier.size(diametro.dp)) {
+            var inicio = -90f
+            datos.forEachIndexed { i, dato ->
+                val barrido = dato.second.toFloat() / total * 360f
+                drawArc(
+                    color = KronoPaleta[i % KronoPaleta.size],
+                    startAngle = inicio,
+                    sweepAngle = barrido,
+                    useCenter = true
+                )
+                inicio += barrido
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            datos.forEachIndexed { i, (etiqueta, valor) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(KronoPaleta[i % KronoPaleta.size])
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "$etiqueta: $valor (${valor * 100 / total}%)",
+                        fontSize = 11.sp,
+                        color = KronoTextDark,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Muestra el gráfico de un reporte según su tipo (barras o pastel).
+@Composable
+fun GraficoReporteView(
+    grafico: GraficoReporte,
+    modifier: Modifier = Modifier,
+    altura: Int = 110
+) {
+    if (grafico.esPastel) MiniPieChart(datos = grafico.datos, modifier = modifier, diametro = altura)
+    else MiniBarChart(datos = grafico.datos, modifier = modifier, altura = altura)
 }

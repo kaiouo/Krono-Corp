@@ -63,6 +63,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.example.krono_corp.data.AppUser
 import com.example.krono_corp.data.ConfigVentasRepository
+import com.example.krono_corp.data.GraficoReporte
 import com.example.krono_corp.data.PreguntaVenta
 import com.example.krono_corp.reportes.abrirArchivo
 import com.example.krono_corp.reportes.compartirArchivo
@@ -85,7 +86,7 @@ data class MensajeChatNegocio(
     val texto: String,
     val esUsuario: Boolean,
     val archivos: List<File> = emptyList(),
-    val grafico: List<Pair<String, Int>>? = null
+    val grafico: GraficoReporte? = null
 )
 
 /** Guarda el chat aunque el usuario cambie de pestaña dentro de la app. */
@@ -98,15 +99,20 @@ class AsistenteNegocioViewModel : ViewModel() {
     private var chat: VentasChat? = null
     private var iniciado = false
 
-    fun iniciar(usuario: AppUser, negocio: NegocioData, context: Context, onArchivoExportado: (String, String, List<File>) -> Unit) {
+    fun iniciar(
+        usuario: AppUser,
+        negocio: NegocioData,
+        context: Context,
+        onArchivoExportado: (String, String, List<File>, GraficoReporte?) -> Unit
+    ) {
         if (iniciado) return
         iniciado = true
         chat = VentasChat(
             usuario = usuario,
             negocio = negocio,
             context = context,
-            alExportar = { titulo, contenido, archivos ->
-                onArchivoExportado(titulo, contenido, archivos)
+            alExportar = { titulo, contenido, archivos, grafico ->
+                onArchivoExportado(titulo, contenido, archivos, grafico)
             },
             alGuardarPreguntas = { lista: List<PreguntaVenta> ->
                 viewModelScope.launch {
@@ -116,15 +122,15 @@ class AsistenteNegocioViewModel : ViewModel() {
         )
         bot(
             "Hola, ${usuario.alias.ifBlank { usuario.email }}. Soy Krono, el asistente de " +
-                "${negocio.nombreNegocio}.\n\n" +
-                "Puedo registrar una venta, consultar tus ventas, generar gráficos y exportarlas " +
-                "a Excel o PDF.\n\n" +
-                "Prueba con los botones o escribe, por ejemplo: «registrar venta», «ventas de este mes» " +
-                "o «exporta mis ventas del mes pasado en Excel»."
+                    "${negocio.nombreNegocio}.\n\n" +
+                    "Puedo registrar una venta, consultar tus ventas, generar reportes con gráfico (de barras o de pastel) y exportarlos " +
+                    "a Excel o PDF.\n\n" +
+                    "Prueba con los botones o escribe, por ejemplo: «registrar venta», «ventas de este mes» " +
+                    "o «exporta mis ventas del mes pasado en Excel»."
         )
     }
 
-    private fun bot(texto: String, archivos: List<File> = emptyList(), grafico: List<Pair<String, Int>>? = null) {
+    private fun bot(texto: String, archivos: List<File> = emptyList(), grafico: GraficoReporte? = null) {
         mensajes.add(MensajeChatNegocio(texto, esUsuario = false, archivos = archivos, grafico = grafico))
     }
 
@@ -138,7 +144,7 @@ class AsistenteNegocioViewModel : ViewModel() {
             try {
                 val respuesta = motor.procesar(pregunta)
                 if (respuesta != null) {
-                    bot(respuesta.texto, archivos = respuesta.archivos)
+                    bot(respuesta.texto, archivos = respuesta.archivos, grafico = respuesta.grafico)
                 } else {
                     bot(motor.preguntarIA(pregunta))
                 }
@@ -149,62 +155,6 @@ class AsistenteNegocioViewModel : ViewModel() {
             }
         }
     }
-
-    fun generarReporte(onListo: (ReporteGenerado) -> Unit) {
-        val motor = chat ?: return
-        if (ocupado) return
-        mensajes.add(MensajeChatNegocio("Generar reporte", esUsuario = true))
-        viewModelScope.launch {
-            ocupado = true
-            motor.reporteDelMes().fold(
-                onSuccess = { reporte ->
-                    if (reporte == null) {
-                        bot("Aún no tienes ventas este mes. Escribe «registrar venta» para empezar.")
-                    } else {
-                        bot(reporte.contenido)
-                        onListo(
-                            ReporteGenerado(
-                                id = 0,
-                                titulo = reporte.titulo,
-                                fecha = LocalDateTime.now().format(formatoFecha),
-                                contenido = reporte.contenido
-                            )
-                        )
-                    }
-                },
-                onFailure = { bot(it.message ?: "No pude generar el reporte.") }
-            )
-            ocupado = false
-        }
-    }
-
-    fun generarGrafico(onListo: (GraficoGenerado) -> Unit) {
-        val motor = chat ?: return
-        if (ocupado) return
-        mensajes.add(MensajeChatNegocio("Generar gráfico", esUsuario = true))
-        viewModelScope.launch {
-            ocupado = true
-            motor.reporteDelMes().fold(
-                onSuccess = { reporte ->
-                    if (reporte == null || reporte.datosGrafico.isEmpty()) {
-                        bot("Aún no tienes ventas este mes para graficar.")
-                    } else {
-                        bot("Unidades vendidas por producto este mes:", grafico = reporte.datosGrafico)
-                        onListo(
-                            GraficoGenerado(
-                                id = 0,
-                                titulo = "Gráfico de ventas - ${reporte.titulo.substringAfter("- ")}",
-                                fecha = LocalDateTime.now().format(formatoFecha),
-                                datos = reporte.datosGrafico
-                            )
-                        )
-                    }
-                },
-                onFailure = { bot(it.message ?: "No pude generar el gráfico.") }
-            )
-            ocupado = false
-        }
-    }
 }
 
 @Composable
@@ -213,7 +163,8 @@ fun AsistenteScreen(
     negocioData: NegocioData,
     usuario: AppUser,
     onReporteGenerado: (ReporteGenerado) -> Unit = {},
-    onGraficoGenerado: (GraficoGenerado) -> Unit = {}
+    // false = pantalla embebida (SUPERVISOR): sin flecha, avatar "K" ni ajustes
+    mostrarBarras: Boolean = true
 ) {
     val context = LocalContext.current
     val vm: AsistenteNegocioViewModel = viewModel(key = usuario.id)
@@ -221,14 +172,15 @@ fun AsistenteScreen(
     var textoEntrada by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(usuario.id) {
-        vm.iniciar(usuario, negocioData, context) { titulo, contenido, archivos ->
+        vm.iniciar(usuario, negocioData, context) { titulo, contenido, archivos, grafico ->
             onReporteGenerado(
                 ReporteGenerado(
                     id = 0,
                     titulo = titulo,
                     fecha = LocalDateTime.now().format(formatoFecha),
                     contenido = contenido,
-                    archivos = archivos.map { it.absolutePath }
+                    archivos = archivos.map { it.absolutePath },
+                    grafico = grafico
                 )
             )
         }
@@ -253,13 +205,17 @@ fun AsistenteScreen(
             .background(KronoBackground)
             .imePadding()
     ) {
-        KronoTopAvatarBar(
-            letraAvatar = "K",
-            onBackClick = {
-                if (!navController.popBackStack()) navController.navigate(Screen.Home.route)
-            },
-            onGearClick = { navController.navigate(Screen.Configuracion.route) }
-        )
+        if (mostrarBarras) {
+            KronoTopAvatarBar(
+                letraAvatar = "K",
+                onBackClick = {
+                    if (!navController.popBackStack()) navController.navigate(Screen.Home.route)
+                },
+                onGearClick = { navController.navigate(Screen.Configuracion.route) }
+            )
+        } else {
+            Spacer(Modifier.height(12.dp))
+        }
 
         Text(
             text = "Asistente",
@@ -339,10 +295,8 @@ fun AsistenteScreen(
                 ChipAccionNegocio("Ventas del mes", Icons.Default.Assessment, libre) { vm.enviar("ventas de este mes") }
             }
             item {
-                ChipAccionNegocio("Generar reporte", Icons.Default.Assessment, libre) { vm.generarReporte(onReporteGenerado) }
-            }
-            item {
-                ChipAccionNegocio("Generar gráfico", Icons.Default.BarChart, libre) { vm.generarGrafico(onGraficoGenerado) }
+                // El reporte siempre lleva gráfico: Krono pregunta si lo quieres de barras o de pastel
+                ChipAccionNegocio("Generar reporte", Icons.Default.Assessment, libre) { vm.enviar("generar reporte de este mes") }
             }
             item {
                 ChipAccionNegocio("Excel", Icons.Default.TableChart, libre) { vm.enviar("exporta mis ventas de este mes en Excel") }
@@ -450,9 +404,9 @@ private fun BurbujaChatNegocio(
                         fontSize = 13.sp,
                         color = if (mensaje.esUsuario) Color.White else KronoTextDark
                     )
-                    mensaje.grafico?.let { datos ->
+                    mensaje.grafico?.let { grafico ->
                         Spacer(Modifier.height(10.dp))
-                        MiniBarChart(datos = datos, altura = 110)
+                        GraficoReporteView(grafico = grafico, altura = 110)
                     }
                     mensaje.archivos.forEach { archivo ->
                         val tipo = if (archivo.extension.equals("pdf", ignoreCase = true)) "PDF" else "Excel"
