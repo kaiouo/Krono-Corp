@@ -103,10 +103,10 @@ La navegación usa **Jetpack Navigation Compose**, con un grafo de navegación i
 
 Proyecto desarrollado en equipo para la materia de Desarrollo de Software Móvil (UDB):
 
-- Erick Vladimir Barrientos López
-- Gustavo Ismael Serrano Rivera
-- Katherine Estefany Beltrán López
-- Fernando Antonio Paz López
+- Erick Vladimir Barrientos López - BL230303
+- Gustavo Ismael Serrano Rivera - SR251873
+- Katherine Estefany Beltrán López - BL233081
+- Fernando Antonio Paz López - LP251570
 
 ## 📄 Licencia
 
