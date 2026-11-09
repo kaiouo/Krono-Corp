@@ -6,9 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Domain
 import androidx.compose.material.icons.filled.PersonAdd
@@ -334,7 +334,7 @@ private fun PanelControl(
 
             TarjetaAdmin(
                 titulo = "Asistente",
-                icono = Icons.Default.Chat,
+                icono = Icons.AutoMirrored.Filled.Chat,
                 colorIcono = Color(0xFF3984F5),
                 modifier = Modifier.weight(1f)
             ) {

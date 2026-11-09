@@ -357,7 +357,7 @@ private fun FilaRegistrado(registro: RegistroInvitado, nuevo: Boolean) {
 // ---------- helpers del enlace ----------
 
 private fun fechaVencimientoInvitacion(milisegundos: Long): String =
-    SimpleDateFormat("dd/MM/yyyy", Locale("es", "SV")).format(Date(milisegundos))
+    SimpleDateFormat("dd/MM/yyyy", Locale.Builder().setLanguage("es").setRegion("SV").build()).format(Date(milisegundos))
 
 private fun copiarEnlaceInvitacion(context: Context, enlace: String) {
     val portapapeles = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

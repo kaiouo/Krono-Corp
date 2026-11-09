@@ -28,7 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.AssistChip
@@ -289,7 +289,7 @@ fun AsistenteScreen(
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
             item {
-                ChipAccionNegocio("Registrar venta", Icons.Default.PlaylistAdd, libre) { vm.enviar("registrar venta") }
+                ChipAccionNegocio("Registrar venta", Icons.AutoMirrored.Filled.PlaylistAdd, libre) { vm.enviar("registrar venta") }
             }
             item {
                 ChipAccionNegocio("Ventas del mes", Icons.Default.Assessment, libre) { vm.enviar("ventas de este mes") }

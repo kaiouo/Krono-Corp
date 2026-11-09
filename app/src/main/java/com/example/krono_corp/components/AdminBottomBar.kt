@@ -2,7 +2,7 @@ package com.example.krono_corp.components
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Description
@@ -44,7 +44,7 @@ fun AdminBottomBar(
             },
             icon = {
                 Icon(
-                    Icons.Default.Chat,
+                    Icons.AutoMirrored.Filled.Chat,
                     contentDescription = "Asistente"
                 )
             },

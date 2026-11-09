@@ -25,7 +25,7 @@ import java.util.Locale
 /** "08/11/2026, 05:23 PM" (hora local del teléfono). */
 fun formatoFechaHora(milisegundos: Long): String =
     if (milisegundos <= 0L) "—"
-    else SimpleDateFormat("dd/MM/yyyy, hh:mm a", Locale("es", "SV")).format(Date(milisegundos))
+    else SimpleDateFormat("dd/MM/yyyy, hh:mm a", Locale.Builder().setLanguage("es").setRegion("SV").build()).format(Date(milisegundos))
 
 /**
  * Avisos para el gerente cuando un supervisor se registra con su enlace de invitación.

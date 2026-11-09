@@ -7,12 +7,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.TrendingUp
+import androidx.compose.material.icons.automirrored.outlined.TrendingUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -56,7 +56,7 @@ fun KronoBottomBar(
             Triple("Home", Icons.Outlined.Home, Screen.Home.route),
             Triple("AI Chat", Icons.Outlined.ChatBubbleOutline, Screen.Asistente.route),
             Triple("Ops", Icons.Outlined.Settings, Screen.Configuracion.route),
-            Triple("Metrics", Icons.Outlined.TrendingUp, Screen.Metricas.route)
+            Triple("Metrics", Icons.AutoMirrored.Outlined.TrendingUp, Screen.Metricas.route)
         )
 
         items.forEach { (label, icon, targetRoute) ->
@@ -145,7 +145,7 @@ fun KronoTopAvatarBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.ArrowBack,
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Regresar al Home",
                         tint = KronoTextDark,
                         modifier = Modifier.size(20.dp)
